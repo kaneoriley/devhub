@@ -12,6 +12,22 @@ struct DeviceProfile: Identifiable, Hashable {
     let playStore: Bool
     let landscape: Bool
     let hardware: [String: String]
+    let apiRanges: [String]
+
+    var kind: DeviceKind {
+        DeviceKind.from(config: hardware.merging(["hw.device.name": id, "hw.lcd.width": "\(width)", "hw.lcd.height": "\(height)", "hw.lcd.density": "\(density)"]) { current, _ in current })
+    }
+
+    func supports(_ image: SystemImage) -> Bool {
+        guard image.supports(kind) else { return false }
+        func version(_ value: String) -> String { value.contains(".") ? value : value + ".0" }
+        return apiRanges.isEmpty || apiRanges.contains { range in
+            let bounds = range.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+            guard bounds.count == 2 else { return version(image.api).compare(version(range), options: .numeric) == .orderedSame }
+            return (bounds[0].isEmpty || version(image.api).compare(version(bounds[0]), options: .numeric) != .orderedAscending)
+                && (bounds[1].isEmpty || version(image.api).compare(version(bounds[1]), options: .numeric) != .orderedDescending)
+        }
+    }
 
     static func load() async -> [DeviceProfile] {
         var profiles: [DeviceProfile] = []
@@ -41,6 +57,7 @@ struct DeviceProfile: Identifiable, Hashable {
         manufacturer = value("manufacturer") ?? "Generic"
         skin = value("skin")
         playStore = value("playstore-enabled") == "true"
+        apiRanges = ((try? node.nodes(forXPath: "./*[local-name()='software']/*[local-name()='api-level']")) ?? []).compactMap(\.stringValue)
         let orientation = try? node.nodes(forXPath: "./*[local-name()='state'][@default='true']/*[local-name()='screen-orientation']")
         landscape = orientation?.first?.stringValue == "land"
         var hardware: [String: String] = [:]
@@ -83,6 +100,12 @@ struct SystemImage: Identifiable, Hashable {
 
     var title: String { "API \(api) · \(tagDisplays.split(separator: ",").first ?? "") · \(abi)" }
 
+    func supports(_ kind: DeviceKind) -> Bool {
+        let tags = tagIDs.lowercased()
+        let family: DeviceKind = tags.contains("android-wear") ? .watch : tags.contains("tv") ? .tv : tags.contains("automotive") ? .automotive : tags.contains("desktop") ? .desktop : .phone
+        return [.phone, .tablet, .foldable, .resizable].contains(kind) ? family == .phone : family == kind
+    }
+
     static func installed() -> [SystemImage] {
         let fm = FileManager.default
         let root = SDK.root.appending(path: "system-images")
@@ -92,7 +115,7 @@ struct SystemImage: Identifiable, Hashable {
             for tag in children(target) {
                 for abi in children("\(target)/\(tag)") {
                     let props = Hub.ini(root.appending(path: "\(target)/\(tag)/\(abi)/source.properties"))
-                    guard let api = props["AndroidVersion.ApiLevel"] else { continue }
+                    guard let api = AndroidAPI.imageVersion(path: target, properties: props) else { continue }
                     images.append(SystemImage(id: "system-images/\(target)/\(tag)/\(abi)/", target: target, api: api, abi: abi,
                                               tagIDs: props["SystemImage.TagId"] ?? tag, tagDisplays: props["SystemImage.TagDisplay"] ?? tag))
                 }
@@ -176,85 +199,122 @@ enum AVD {
     }
 }
 
+struct EmulatorCreationCatalog {
+    let devices: [DeviceProfile]
+    let images: [SystemImage]
+    var kinds: [DeviceKind] { DeviceKind.allCases.filter { kind in devices.contains { $0.kind == kind } } }
+    func images(for kind: DeviceKind) -> [SystemImage] {
+        images.filter { image in devices.contains { $0.kind == kind && $0.supports(image) } }
+    }
+    func models(kind: DeviceKind, imageID: String) -> [DeviceProfile] {
+        guard let image = images.first(where: { $0.id == imageID }) else { return [] }
+        return devices.filter { $0.kind == kind && $0.supports(image) }
+    }
+}
+
+struct EmulatorCreationSelection {
+    var kind: DeviceKind = .phone
+    var imageID = ""
+    var modelID = ""
+
+    mutating func reconcile(_ catalog: EmulatorCreationCatalog) {
+        if !catalog.kinds.contains(kind) { kind = catalog.kinds.first ?? .phone }
+        let images = catalog.images(for: kind)
+        if !images.contains(where: { $0.id == imageID }) { imageID = images.first?.id ?? "" }
+        let models = catalog.models(kind: kind, imageID: imageID)
+        if !models.contains(where: { $0.id == modelID }) {
+            modelID = (models.first { $0.id == "medium_phone" } ?? models.first)?.id ?? ""
+        }
+    }
+}
+
 struct NewEmulatorSheet: View {
     @Environment(Hub.self) private var hub
     @Environment(\.dismiss) private var dismiss
-    @State private var devices: [DeviceProfile] = []
-    @State private var images = SystemImage.installed()
-    @State private var device: DeviceProfile?
-    @State private var image: SystemImage?
+    @State private var catalog = EmulatorCreationCatalog(devices: [], images: SystemImage.installed())
+    @State private var selection = EmulatorCreationSelection()
     @State private var name = ""
+    @State private var suggestedName = ""
     @State private var loaded = false
     @State private var failure: String?
 
+    private var images: [SystemImage] { catalog.images(for: selection.kind) }
+    private var models: [DeviceProfile] { catalog.models(kind: selection.kind, imageID: selection.imageID) }
+    private var device: DeviceProfile? { models.first { $0.id == selection.modelID } }
+    private var image: SystemImage? { images.first { $0.id == selection.imageID } }
+
     var body: some View {
         VStack(spacing: 0) {
+            Text("New Android Emulator").font(.headline).padding(.top, 20)
             Form {
                 Section {
+                    Picker("Form Factor", selection: choice(\.kind)) {
+                        ForEach(catalog.kinds, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Picker("OS Version", selection: choice(\.imageID)) {
+                        ForEach(images) { Text($0.title).tag($0.id) }
+                    }
+                    Picker("Model", selection: choice(\.modelID)) {
+                        ForEach(models) { Text($0.name).tag($0.id) }
+                    }
                     TextField("Name", text: $name)
-                    Picker("Device", selection: $device) {
-                        ForEach(devices) { Text($0.name).tag(Optional($0)) }
-                    }
-                    Picker("System Image", selection: $image) {
-                        ForEach(images) { Text($0.title).tag(Optional($0)) }
-                    }
                 } footer: {
-                    if loaded && devices.isEmpty {
+                    if loaded && catalog.devices.isEmpty {
                         Text("The bundled device catalog couldn't be loaded. Reinstall DroidHub.")
-                    } else if images.isEmpty {
-                        Text("No Android system images installed. Add one with sdkmanager or Android Studio's SDK Manager.")
+                    } else if loaded && images.isEmpty {
+                        Text("No compatible Android system images installed for this form factor. Add one with sdkmanager or Android Studio's SDK Manager.")
                     } else if let failure {
                         Text(failure).foregroundStyle(.red)
                     }
                 }
             }
             .formStyle(.grouped)
+            .disabled(!loaded)
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Create", action: create)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(device == nil || image == nil || name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding([.horizontal, .bottom], 20)
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Create", action: create).keyboardShortcut(.defaultAction)
+                    .disabled(device == nil || image == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
         .task {
-            devices = await DeviceProfile.load()
-            image = images.first
-            // Android Studio's default too; the newest Pixel in the list is a foldable.
-            device = devices.first { $0.id == "medium_phone" } ?? devices.first
+            let profiles = await DeviceProfile.load()
+            catalog = EmulatorCreationCatalog(devices: profiles, images: catalog.images)
+            selection.reconcile(catalog)
+            updateName()
             loaded = true
-        }
-        .onChange(of: device) { old, new in
-            // Follow the device name until the user types their own.
-            if let new, name.isEmpty || name == old.map(uniqueName) { name = uniqueName(new) }
         }
     }
 
-    /// "Pixel 10", or "Pixel 10 (2)" when that one exists.
-    private func uniqueName(_ device: DeviceProfile) -> String {
-        var candidate = device.name
-        var n = 2
-        while AVD.exists(candidate) {
-            candidate = "\(device.name) (\(n))"
-            n += 1
-        }
-        return candidate
+    private func choice<Value>(_ key: WritableKeyPath<EmulatorCreationSelection, Value>) -> Binding<Value> {
+        Binding(get: { selection[keyPath: key] }, set: { value in
+            var next = selection
+            next[keyPath: key] = value
+            next.reconcile(catalog)
+            selection = next
+            failure = nil
+            updateName()
+        })
+    }
+
+    private func updateName() {
+        guard let device else { return }
+        var suggestion = device.name, number = 2
+        while AVD.exists(suggestion) { suggestion = "\(device.name) (\(number))"; number += 1 }
+        if name.isEmpty || name == suggestedName { name = suggestion }
+        suggestedName = suggestion
     }
 
     private func create() {
         guard let device, let image else { return }
         do {
-            let id = try AVD.create(name: name.trimmingCharacters(in: .whitespaces), device: device, image: image)
+            let id = try AVD.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines), device: device, image: image)
             Task {
                 await hub.refresh()
                 hub.selection = "avd:\(id)"
             }
             dismiss()
-        } catch {
-            failure = "\(error)"
-        }
+        } catch { failure = "\(error)" }
     }
 }

@@ -18,7 +18,7 @@ struct AppleSimulator: Hashable {
         switch family { case "iPad": return .tablet; case "Apple Watch": return .watch; case "Apple TV": return .tv; case "Apple Vision": return .desktop; default: return .phone }
     }
 
-    static func parse(_ data: Data, visibleDeviceIDs: Set<String>? = nil, defaultDeviceIDs: Set<String> = []) throws -> [Device] {
+    static func parse(_ data: Data, visibleDeviceIDs: Set<String>? = nil, defaultDeviceIDs: Set<String> = [], includedDeviceIDs: Set<String> = []) throws -> [Device] {
         struct Inventory: Decodable {
             struct Runtime: Decodable { let identifier: String; let name: String; let version: String; let isAvailable: Bool }
             struct Kind: Decodable { let identifier: String; let name: String; let productFamily: String? }
@@ -32,6 +32,7 @@ struct AppleSimulator: Hashable {
             guard let runtime = inventory.runtimes.first(where: { $0.identifier == runtimeID && $0.isAvailable }) else { return [] }
             return entries.filter { entry in
                 guard entry.isAvailable else { return false }
+                if includedDeviceIDs.contains(entry.udid) { return true }
                 if let visibleDeviceIDs { return visibleDeviceIDs.contains(entry.udid) }
                 // Older toolchains lack CoreDevice's simulator inventory. Hide only
                 // unused auto-created defaults; explicitly created devices remain visible.
@@ -47,14 +48,14 @@ struct AppleSimulator: Hashable {
         }.sorted { ($0.name, $0.api, $0.id) < ($1.name, $1.api, $1.id) }
     }
 
-    static func list() async -> [Device] {
+    static func list(including createdIDs: Set<String> = []) async -> [Device] {
         async let discovery = AppleDevice.inventory()
         let result = try? await Simctl.run(["list", "--json"])
         let data = await discovery
         let physical = data.flatMap { try? AppleDevice.parse($0) } ?? []
         guard let result, result.status == 0 else { return physical }
-        let visible = data.flatMap { try? publishedIDs($0) }
-        return ((try? parse(Data(result.output.utf8), visibleDeviceIDs: visible, defaultDeviceIDs: defaultDeviceIDs())) ?? []) + physical
+        let visible = data.flatMap { try? publishedIDs($0) }.map { $0.union(createdIDs) }
+        return ((try? parse(Data(result.output.utf8), visibleDeviceIDs: visible, defaultDeviceIDs: defaultDeviceIDs(), includedDeviceIDs: createdIDs)) ?? []) + physical
     }
 
     static func publishedIDs(_ data: Data) throws -> Set<String>? {
@@ -79,17 +80,40 @@ struct AppleSimulator: Hashable {
         return Set(simulators.map(\.identifier))
     }
 
-    private static func defaultDeviceIDs() -> Set<String> {
+    static func defaultDeviceIDs() -> Set<String> {
         // CoreSimulator's default-device registry backs isDefaultCreatedDevice.
         let path = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Developer/CoreSimulator/Devices/device_set.plist")
-        guard let data = try? Data(contentsOf: path),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let defaults = root["DefaultDevices"] as? [String: [String: String]] else { return [] }
-        return Set(defaults.values.flatMap(\.values))
+        guard let data = try? Data(contentsOf: path) else { return [] }
+        return defaultDeviceIDs(in: data)
+    }
+
+    static func defaultDeviceIDs(in data: Data) -> Set<String> {
+        guard let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let defaults = root["DefaultDevices"] as? [String: Any] else { return [] }
+        // The dictionary also contains a numeric schema version.
+        return Set(defaults.values.compactMap { $0 as? [String: String] }.flatMap(\.values))
     }
 }
 
 enum Simctl {
+    static func deleteSimulator(_ udid: String, run: ([String]) async throws -> ADBResult = { try await Simctl.run($0) }) async throws {
+        guard UUID(uuidString: udid) != nil else { throw MirrorError("Invalid simulator identifier.") }
+        struct Inventory: Decodable {
+            struct Entry: Decodable { let udid: String; let state: String }
+            let devices: [String: [Entry]]
+        }
+        // Recheck instead of trusting the sidebar's polling snapshot: another app
+        // can boot the simulator while the confirmation dialog is open.
+        let result = try await run(["list", "devices", "--json"])
+        try result.checked()
+        let inventory = try JSONDecoder().decode(Inventory.self, from: Data(result.output.utf8))
+        guard let device = inventory.devices.values.flatMap({ $0 }).first(where: { $0.udid == udid }) else {
+            throw MirrorError("This simulator no longer exists.")
+        }
+        guard device.state == "Shutdown" else { throw MirrorError("Shut down the simulator before deleting it. Its current state is \(device.state).") }
+        try await run(["delete", udid]).checked()
+    }
+
     static func run(_ args: [String], input: Data? = nil) async throws -> ADBResult {
         try await runTool("simctl", args, input: input)
     }
@@ -124,20 +148,7 @@ enum Simctl {
     }
 
     static func transfer(_ urls: [URL], udid: String) async throws -> String {
-        guard !urls.isEmpty else { throw MirrorError("Drop a simulator .app, photos, videos, or contacts.") }
-        let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
-        defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
-        let apps = urls.filter { $0.pathExtension.lowercased() == "app" }
-        let media = Set(["png", "jpg", "jpeg", "heic", "gif", "mov", "mp4", "m4v", "vcf"])
-        guard apps.count == urls.count || (apps.isEmpty && urls.allSatisfy({ media.contains($0.pathExtension.lowercased()) })) else {
-            throw MirrorError("Drop simulator .app bundles to install, or photos, videos, and contacts to import. Install apps and import media in separate drops.")
-        }
-        if !apps.isEmpty {
-            for app in apps { try await run(["install", udid, app.path]).checked() }
-            return apps.count == 1 ? "Installed \(apps[0].lastPathComponent)" : "Installed \(apps.count) apps"
-        }
-        try await run(["addmedia", udid] + urls.map(\.path)).checked()
-        return "Imported \(urls.count) \(urls.count == 1 ? "file" : "files")"
+        try await SimulatorFileTransfer().transfer(urls, udid: udid)
     }
 }
 

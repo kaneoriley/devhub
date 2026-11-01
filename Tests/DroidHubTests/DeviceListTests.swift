@@ -27,7 +27,7 @@ private func simulator(_ id: String, name: String = "Phone", version: String = "
                    simulator("iphone", name: "iPhone")]
     let listing = DeviceList(sort: .formFactor)
     let groups = listing.groups(devices)
-    #expect(groups.map(\.title) == ["Phones", "Tablets", "Foldables", "Resizable Devices"])
+    #expect(groups.map(\.title) == ["Phones", "Tablets", "Foldables", "Resizables"])
     #expect(groups[0].devices.map(\.id) == ["phone", "iphone"])
     #expect(groups[1].devices.map(\.id) == ["ipad", "tablet"])
     #expect(DeviceList(sort: .formFactor, showGroups: false).groups(devices).first?.devices.map(\.id) == ["phone", "iphone", "ipad", "tablet", "fold", "adaptive"])

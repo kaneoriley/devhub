@@ -32,7 +32,7 @@ struct ContentView: View {
     @AppStorage("deviceList.showGroups") private var showGroups = true
     @State private var query = ""
     @State private var panel: Panel?
-    @State private var creating = false
+    @State private var creating: NewDeviceKind?
 
     private var listing: DeviceList {
         DeviceList(filter: deviceFilter, sort: deviceSort, showGroups: showGroups,
@@ -60,11 +60,16 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
             .toolbar {
                 ToolbarItemGroup {
-                    Button("New Emulator", systemImage: "plus") { creating = true }
+                    NewDeviceMenu(selection: $creating)
                     DeviceListMenu()
                 }
             }
-            .sheet(isPresented: $creating) { NewEmulatorSheet().environment(hub) }
+            .sheet(item: $creating) { kind in
+                switch kind {
+                case .android: NewEmulatorSheet().environment(hub)
+                case .ios: NewSimulatorSheet().environment(hub)
+                }
+            }
         } detail: {
             if let device = hub.selected {
                 if let simulator = device.simulator {
@@ -104,6 +109,7 @@ struct DeviceRow: View {
     let device: Device
     @State private var confirmingDelete = false
     @State private var deleteRefused = false
+    @State private var deleting = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -120,19 +126,18 @@ struct DeviceRow: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
-            if device.simulator != nil {
+            if let simulator = device.simulator {
                 if device.isRunning { Button("Shut Down") { hub.shutdown(device) } }
-                else { Button("Boot") { hub.boot(device) }.disabled(hub.booting.contains(device.id)) }
+                else {
+                    Button("Boot") { hub.boot(device) }.disabled(hub.booting.contains(device.id) || deleting)
+                    if simulator.state == "Shutdown" { Divider(); deleteButton }
+                }
             }
             if device.isEmulator {
                 if device.serial == nil {
-                    Button("Boot") { hub.boot(device) }
+                    Button("Boot") { hub.boot(device) }.disabled(hub.booting.contains(device.id) || deleting)
                     Divider()
-                    Button("Delete…", role: .destructive) {
-                        // An emulator started outside DroidHub has no serial until it finishes booting.
-                        if let avd = device.avd, AVD.isRunning(avd) { deleteRefused = true } else { confirmingDelete = true }
-                    }
-                    .disabled(hub.booting.contains(device.id))
+                    deleteButton
                 } else {
                     Button("Shut Down") { hub.shutdown(device) }
                 }
@@ -140,17 +145,29 @@ struct DeviceRow: View {
         }
         .confirmationDialog("Delete \(device.name)?", isPresented: $confirmingDelete) {
             Button("Delete", role: .destructive) {
-                if let avd = device.avd { try? AVD.delete(avd) }
-                Task { await hub.refresh() }
+                deleting = true
+                Task { @MainActor in
+                    defer { deleting = false }
+                    await hub.delete(device)
+                }
             }
         } message: {
-            Text("The emulator and everything installed on it go away. This can't be undone.")
+            Text("The \(device.simulator == nil ? "emulator" : "simulator") and everything installed on it go away. This can't be undone.")
         }
         .alert("\(device.name) is running", isPresented: $deleteRefused) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Shut it down before deleting it.")
         }
+    }
+
+    private var deleteButton: some View {
+        Button("Delete…", role: .destructive) {
+            // An emulator started elsewhere may still have no serial while booting.
+            if let avd = device.avd, AVD.isRunning(avd) { deleteRefused = true }
+            else { confirmingDelete = true }
+        }
+        .disabled(hub.booting.contains(device.id) || deleting)
     }
 }
 
@@ -172,6 +189,7 @@ struct DeviceView: View {
     @State private var dropTargeted = false
     @State private var transferring = false
     @State private var transferStatus: String?
+    @State private var transferID = UUID()
     @State private var actionFailure: String?
     @State private var presets: [DisplayPreset] = []
     @State private var displayController: DisplayController?
@@ -219,20 +237,10 @@ struct DeviceView: View {
             }
             .overlay(alignment: .top) {
                 if let transferStatus {
-                    HStack(spacing: 10) {
-                        if transferring { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "checkmark.circle") }
-                        Text(transferStatus).lineLimit(2)
-                        if !transferring {
-                            Button("Dismiss", systemImage: "xmark") { self.transferStatus = nil }
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(12)
-                    .glassEffect(in: .rect(cornerRadius: 12))
-                    .padding(16)
-                    .accessibilityElement(children: .contain)
+                    let id = transferID
+                    TransferNotice(message: transferStatus, isTransferring: transferring) {
+                        if transferID == id, !transferring { self.transferStatus = nil }
+                    }.id(id)
                 }
             }
             .alert("Device Action Failed", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
@@ -466,6 +474,7 @@ struct DeviceView: View {
 
     private func receive(_ files: [URL]) -> Bool {
         guard let serial = device.serial, !transferring, !files.isEmpty, files.allSatisfy(\.isFileURL) else { return false }
+        transferID = UUID()
         transferring = true
         transferStatus = "Preparing files…"
         Task { @MainActor in

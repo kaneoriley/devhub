@@ -75,6 +75,10 @@ final class Hub {
     var savedScreenshot: SavedScreenshot?
     @ObservationIgnored private var screenshotDismissal: Task<Void, Never>?
     @ObservationIgnored private var props: [String: [String: String]] = [:]
+    @ObservationIgnored private var createdSimulatorIDs = Set(UserDefaults.standard.stringArray(forKey: "createdSimulatorIDs") ?? []) {
+        didSet { UserDefaults.standard.set(Array(createdSimulatorIDs), forKey: "createdSimulatorIDs") }
+    }
+    @ObservationIgnored private var refreshRequest = 0
 
     var selected: Device? { devices.first { $0.id == selection } }
 
@@ -115,7 +119,9 @@ final class Hub {
     }
 
     func refresh() async {
-        async let simulators = AppleSimulator.list()
+        refreshRequest += 1
+        let request = refreshRequest
+        async let simulators = AppleSimulator.list(including: createdSimulatorIDs)
         let serials = await adb("devices").split(separator: "\n").dropFirst().compactMap { line -> String? in
             let f = line.split(separator: "\t")
             return f.count == 2 && f[1] == "device" ? String(f[0]) : nil
@@ -146,6 +152,7 @@ final class Hub {
         list.sort { ($0.isEmulator ? 1 : 0, $0.name) < ($1.isEmulator ? 1 : 0, $1.name) }
 
         list += await simulators
+        guard request == refreshRequest else { return }
         simulatorSessions.retain(Set(list.compactMap { $0.simulator?.isBooted == true ? $0.simulator?.udid : nil }))
         androidSessions.retain(Set(list.compactMap(\.serial)))
         booting.subtract(list.filter { $0.simulator == nil && $0.isRunning }.map(\.id))
@@ -196,6 +203,32 @@ final class Hub {
         }
         guard let serial = device.serial else { return }
         Task { await adb("-s", serial, "emu", "kill") }
+    }
+
+    func delete(_ device: Device) async {
+        do {
+            guard !booting.contains(device.id) else { throw MirrorError("Shut it down before deleting it.") }
+            if let simulator = device.simulator {
+                try await Simctl.deleteSimulator(simulator.udid)
+                createdSimulatorIDs.remove(simulator.udid)
+            } else if let avd = device.avd {
+                guard !AVD.isRunning(avd) else { throw MirrorError("Shut down the emulator before deleting it.") }
+                try AVD.delete(avd)
+            } else { return }
+            await refresh()
+        } catch { failure = String(describing: error) }
+    }
+
+    func createSimulator(name: String, modelID: String, runtimeID: String, catalog: SimulatorCatalog) async throws {
+        let id = try await catalog.create(name: name, modelID: modelID, runtimeID: runtimeID)
+        // CoreDevice may publish the new device after simctl returns. Include it
+        // immediately from CoreSimulator's inventory while that catches up.
+        createdSimulatorIDs.insert(id)
+        if UserDefaults.standard.string(forKey: "deviceList.filter") == DeviceFilter.physical.rawValue {
+            UserDefaults.standard.set(DeviceFilter.all.rawValue, forKey: "deviceList.filter")
+        }
+        await refresh()
+        selection = "simulator:\(id)"
     }
 
     /// Saves to the Desktop and copies to the clipboard, like Simulator.

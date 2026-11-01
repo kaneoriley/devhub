@@ -1,7 +1,9 @@
 import SwiftUI
 
-enum DeviceKind: String {
+enum DeviceKind: String, CaseIterable {
     case phone, tablet, foldable, resizable, tv, watch, automotive, desktop
+
+    var title: String { rawValue == "tv" ? "TV" : rawValue.capitalized }
 
     static func from(config: [String: String]) -> DeviceKind {
         let name = (config["hw.device.name"] ?? "").lowercased()

@@ -59,7 +59,7 @@ private extension DeviceKind {
     }
     var listTitle: String {
         switch self {
-        case .phone: "Phones"; case .tablet: "Tablets"; case .foldable: "Foldables"; case .resizable: "Resizable Devices"
+        case .phone: "Phones"; case .tablet: "Tablets"; case .foldable: "Foldables"; case .resizable: "Resizables"
         case .watch: "Watches"; case .tv: "TVs"; case .automotive: "Automotive"; case .desktop: "Desktops"
         }
     }

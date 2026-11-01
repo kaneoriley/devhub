@@ -9,7 +9,7 @@ struct DeviceListMenu: View {
             Label("Filter and Sort Devices", systemImage: "line.3.horizontal.decrease")
                 .imageScale(.large)
         }
-        .background(DeviceListMenuAnchor(presenter: presenter).allowsHitTesting(false))
+        .background(ToolbarMenuAnchor { presenter.anchor = $0 }.allowsHitTesting(false))
         .help("Filter and sort devices")
         .accessibilityLabel("Filter and Sort Devices")
     }
@@ -78,14 +78,14 @@ struct DeviceListMenu: View {
     }
 }
 
-private struct DeviceListMenuAnchor: NSViewRepresentable {
-    let presenter: DeviceListMenuPresenter
+struct ToolbarMenuAnchor: NSViewRepresentable {
+    let attach: (NSView) -> Void
     func makeNSView(context: Context) -> NSView {
         let view = AnchorView()
-        presenter.anchor = view
+        attach(view)
         return view
     }
-    func updateNSView(_ view: NSView, context: Context) { presenter.anchor = view }
+    func updateNSView(_ view: NSView, context: Context) { attach(view) }
     private final class AnchorView: NSView {
         override var isFlipped: Bool { true }
     }

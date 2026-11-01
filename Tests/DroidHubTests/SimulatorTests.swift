@@ -23,6 +23,8 @@ import Testing
     #expect(!devices[2].isRunning && devices[2].kind == .tablet)
     #expect(devices.allSatisfy { $0.api == "27.1" })
     #expect(try AppleSimulator.parse(data, visibleDeviceIDs: ["new"]).map(\.id) == ["simulator:new"])
+    #expect(try AppleSimulator.parse(data, visibleDeviceIDs: [], defaultDeviceIDs: ["unused"], includedDeviceIDs: ["unused"]).map(\.id) == ["simulator:unused"])
+    #expect(try AppleSimulator.parse(data, defaultDeviceIDs: ["unused"], includedDeviceIDs: ["unused"]).contains { $0.id == "simulator:unused" })
 }
 
 @Test func canonicalSimulatorDiscoveryUsesApplesVisibilityClassification() throws {
@@ -116,4 +118,10 @@ import Testing
         #expect(contour.path(in: rect, rotation: .zero).boundingRect == rect)
         #expect(contour.path(in: rect, rotation: .zero).contains(CGPoint(x: 1, y: 1)))
     }
+}
+
+
+@Test func simulatorDefaultRegistryAllowsTheSchemaVersionAlongsideRuntimeEntries() throws {
+    let data = try PropertyListSerialization.data(fromPropertyList: ["DefaultDevices": ["version": 1, "runtime": ["phone": "default-phone", "tablet": "default-tablet"]]], format: .binary, options: 0)
+    #expect(AppleSimulator.defaultDeviceIDs(in: data) == ["default-phone", "default-tablet"])
 }

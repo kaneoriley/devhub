@@ -12,6 +12,7 @@ struct AppleSimulatorView: View {
     @State private var attempt = 0
     @State private var transferring = false
     @State private var transferStatus: String?
+    @State private var transferID = UUID()
     @State private var targeted = false
 
     var body: some View {
@@ -44,17 +45,16 @@ struct AppleSimulatorView: View {
                 if targeted && simulator.isBooted && !transferring {
                     RoundedRectangle(cornerRadius: 16).fill(.tint.opacity(0.12))
                         .strokeBorder(.tint, style: StrokeStyle(lineWidth: 2, dash: [8]))
-                        .overlay { Text("Drop simulator apps, photos, videos, or contacts").padding(20).glassEffect(in: .rect(cornerRadius: 12)) }
+                        .overlay { Text("Drop apps to install or files to copy to Files → Downloads").padding(20).glassEffect(in: .rect(cornerRadius: 12)) }
                         .padding(16).allowsHitTesting(false)
                 }
             }
             .overlay(alignment: .top) {
                 if let transferStatus {
-                    HStack {
-                        if transferring { ProgressView().controlSize(.small) }
-                        Text(transferStatus)
-                        if !transferring { Button("Dismiss", systemImage: "xmark") { self.transferStatus = nil }.labelStyle(.iconOnly).buttonStyle(.plain) }
-                    }.padding(12).glassEffect(in: .rect(cornerRadius: 12)).padding(16)
+                    let id = transferID
+                    TransferNotice(message: transferStatus, isTransferring: transferring) {
+                        if transferID == id, !transferring { self.transferStatus = nil }
+                    }.id(id)
                 }
             }
             .alert("Simulator Action Failed", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
@@ -131,7 +131,7 @@ struct AppleSimulatorView: View {
     }
     private func receive(_ files: [URL]) -> Bool {
         guard simulator.isBooted, !transferring, !files.isEmpty else { return false }
-        transferring = true; transferStatus = "Importing…"
+        transferID = UUID(); transferring = true; transferStatus = "Transferring…"
         Task {
             defer { transferring = false }
             do { transferStatus = try await Simctl.transfer(files, udid: simulator.udid) }

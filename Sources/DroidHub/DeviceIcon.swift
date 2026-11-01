@@ -26,9 +26,10 @@ struct DeviceIcon: View {
     let kind: DeviceKind
     var filled = false
     var muted = false
+    var simulator = false
 
-    init(_ kind: DeviceKind, filled: Bool = false, muted: Bool = false) {
-        self.kind = kind; self.filled = filled; self.muted = muted
+    init(_ kind: DeviceKind, filled: Bool = false, muted: Bool = false, simulator: Bool = false) {
+        self.kind = kind; self.filled = filled; self.muted = muted; self.simulator = simulator
     }
     init(_ factor: FormFactor) {
         kind = factor == .phone ? .phone : factor == .tablet ? .tablet : .foldable
@@ -47,7 +48,7 @@ struct DeviceIcon: View {
                             DeviceOutline(kind: kind).fill(.primary.opacity(0.04))
                         } else {
                             DeviceOutline(kind: kind)
-                                .fill(LinearGradient(colors: [Color(red: 0.68, green: 0.94, blue: 0.48), Color(red: 0.22, green: 0.68, blue: 0.36)], startPoint: .top, endPoint: .bottom))
+                                .fill(LinearGradient(colors: simulator ? [Color(red: 0.62, green: 0.86, blue: 1), Color(red: 0.2, green: 0.66, blue: 0.9)] : [Color(red: 0.68, green: 0.94, blue: 0.48), Color(red: 0.22, green: 0.68, blue: 0.36)], startPoint: .top, endPoint: .bottom))
                         }
                     }
                     DeviceOutline(kind: kind).stroke(style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
@@ -97,11 +98,12 @@ struct DeviceBadge: View {
     let kind: DeviceKind
     let selected: Bool
     let running: Bool
+    var simulator = false
 
     var body: some View {
         ZStack {
             Circle().fill(.white.opacity(selected ? (running ? 0.65 : 0.25) : (running ? 0.2 : 0.08)))
-            DeviceIcon(kind, filled: true, muted: !running)
+            DeviceIcon(kind, filled: true, muted: !running, simulator: simulator)
                 .foregroundStyle(running ? AnyShapeStyle(.black.opacity(0.85)) : AnyShapeStyle(.primary.opacity(0.25)))
                 .scaleEffect(1.15)
         }

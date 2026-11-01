@@ -30,7 +30,7 @@ struct AboutView: View {
             Text("DroidHub").font(.system(size: 28, weight: .bold, design: .rounded))
             Text("Version \(info["CFBundleShortVersionString"] ?? "dev") · scrcpy \(info["ScrcpyVersion"] ?? "?")")
                 .foregroundStyle(.secondary)
-            Text("Android emulators and phones in one window, with the screen live and clickable.")
+            Text("Android emulators, phones, and Apple simulators in one window, with the screen live and clickable.")
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)  // a Window sizes Text to one line otherwise
                 .padding(.top, 4)
@@ -99,7 +99,7 @@ struct WelcomeView: View {
         VStack(spacing: 16) {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 112, height: 112)
             Text("Welcome to DroidHub").font(.system(size: 32, weight: .bold, design: .rounded))
-            Text("Emulators and phones in one window, with the screen live and clickable. Boot AVDs headless, type on the device, share the clipboard and follow logcat.")
+            Text("Android devices and Apple simulators in one window, with the screen live and clickable. Boot virtual devices, type on the screen, share the clipboard and follow Android logs.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -111,7 +111,7 @@ struct WelcomeView: View {
         VStack(spacing: 16) {
             Image(systemName: "shippingbox").font(.system(size: 48)).foregroundStyle(.tint)
             Text("Android SDK").font(.system(size: 28, weight: .bold, design: .rounded))
-            Text("DroidHub uses the SDK from Android Studio, in ~/Library/Android/sdk or wherever ANDROID_HOME points. Emulators are the AVDs in ~/.android/avd, and phones show up when USB debugging is on.")
+            Text("DroidHub uses your Android SDK, in ~/Library/Android/sdk or wherever ANDROID_HOME points. Android Studio is optional: device profiles are bundled, and SDK tools and system images can be installed separately. Apple simulators use the selected Xcode installation. Phones show up when USB debugging is on.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             VStack(alignment: .leading, spacing: 6) {

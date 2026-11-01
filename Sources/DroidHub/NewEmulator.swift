@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A phone or tablet from Android Studio's device catalog, the one its Device Manager uses.
+/// A hardware profile from Google's bundled Android device catalog.
 struct DeviceProfile: Identifiable, Hashable {
     let id: String
     let name: String
@@ -11,21 +11,18 @@ struct DeviceProfile: Identifiable, Hashable {
     let skin: String?
     let playStore: Bool
     let landscape: Bool
-
-    // ponytail: the catalog only ships inside Android Studio; without it the list is empty.
-    private static let jars = ["/Applications", "\(NSHomeDirectory())/Applications"]
-        .map { "\($0)/Android Studio.app/Contents/plugins/android/lib/sdklib.jar" }
+    let hardware: [String: String]
 
     static func load() async -> [DeviceProfile] {
-        guard let jar = jars.first(where: FileManager.default.fileExists) else { return [] }
         var profiles: [DeviceProfile] = []
         for file in ["nexus", "devices"] {
-            let xml = await exec("/usr/bin/unzip", ["-p", jar, "com/android/sdklib/devices/\(file).xml"])
-            guard let doc = try? XMLDocument(data: xml) else { continue }
+            guard let url = Bundle.module.url(forResource: file, withExtension: "xml"),
+                  let doc = try? XMLDocument(contentsOf: url) else { continue }
             let parsed = ((try? doc.nodes(forXPath: "//*[local-name()='device']")) ?? []).compactMap(DeviceProfile.init)
             profiles += file == "nexus" ? parsed.reversed() : parsed  // newest Pixels first
         }
-        return profiles
+        var seen = Set<String>()
+        return profiles.filter { seen.insert($0.id).inserted }
     }
 
     init?(_ node: XMLNode) {
@@ -46,6 +43,26 @@ struct DeviceProfile: Identifiable, Hashable {
         playStore = value("playstore-enabled") == "true"
         let orientation = try? node.nodes(forXPath: "./*[local-name()='state'][@default='true']/*[local-name()='screen-orientation']")
         landscape = orientation?.first?.stringValue == "land"
+        var hardware: [String: String] = [:]
+        if let hinge = (try? node.nodes(forXPath: ".//*[local-name()='hinge']"))?.first {
+            hardware["hw.sensor.hinge"] = "yes"
+            for (xml, key) in [("count", "hw.sensor.hinge.count"), ("type", "hw.sensor.hinge.type"),
+                               ("sub-type", "hw.sensor.hinge.sub_type"), ("ranges", "hw.sensor.hinge.ranges"),
+                               ("defaults", "hw.sensor.hinge.defaults"), ("areas", "hw.sensor.hinge.areas"),
+                               ("posture-list", "hw.sensor.posture_list"), ("hinge-angles-posture-definitions", "hw.sensor.hinge_angles_posture_definitions")] {
+                if let value = (try? hinge.nodes(forXPath: "./*[local-name()='\(xml)']"))?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    hardware[key] = value
+                }
+            }
+        }
+        for (xml, key) in [("x-folded-offset", "xOffset"), ("y-folded-offset", "yOffset"),
+                           ("x-folded-dimension", "width"), ("y-folded-dimension", "height")] {
+            if let value = value(xml) { hardware["hw.displayRegion.0.1.\(key)"] = value }
+        }
+        if id == "resizable" {
+            hardware["hw.resizable.configs"] = "phone-0-1080-2400-420, foldable-1-2208-1840-420, tablet-2-1920-1200-240, desktop-3-1920-1080-160"
+        }
+        self.hardware = hardware
     }
 
     /// "420dpi" or a bucket name like "xxhdpi".
@@ -122,6 +139,7 @@ enum AVD {
         } else {
             entries += [("showDeviceFrame", "no"), ("skin.name", "\(device.width)x\(device.height)")]
         }
+        entries += device.hardware.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
         return entries.map { "\($0)=\($1)\n" }.joined()
     }
 
@@ -182,9 +200,9 @@ struct NewEmulatorSheet: View {
                     }
                 } footer: {
                     if loaded && devices.isEmpty {
-                        Text("The device list comes from Android Studio, which isn't in /Applications.")
+                        Text("The bundled device catalog couldn't be loaded. Reinstall DroidHub.")
                     } else if images.isEmpty {
-                        Text("No system images installed. Add one in Android Studio's SDK Manager.")
+                        Text("No Android system images installed. Add one with sdkmanager or Android Studio's SDK Manager.")
                     } else if let failure {
                         Text(failure).foregroundStyle(.red)
                     }

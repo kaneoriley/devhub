@@ -9,10 +9,13 @@ struct Device: Identifiable, Hashable {
     var release = ""
     var api = ""
     var kind = DeviceKind.phone
+    var simulator: AppleSimulator?
+    var appleDevice: AppleDevice?
     var avd: String?
     /// Set once the device is online and booted.
     var serial: String?
     var isEmulator: Bool { avd != nil }
+    var isRunning: Bool { simulator?.isBooted ?? appleDevice?.isConnected ?? (serial != nil) }
 }
 
 enum SDK {
@@ -53,6 +56,8 @@ func adb(_ args: String...) async -> String {
 @Observable @MainActor
 final class Hub {
     @ObservationIgnored private var displayControllers: [String: DisplayController] = [:]
+    @ObservationIgnored let simulatorSessions = DeviceSessionCache<SimulatorMirror>()
+    @ObservationIgnored let androidSessions = DeviceSessionCache<AndroidMirrorSession>()
 
     func displayController(serial: String, isEmulator: Bool) -> DisplayController {
         if let controller = displayControllers[serial] { return controller }
@@ -63,6 +68,7 @@ final class Hub {
     var devices: [Device] = []
     var selection: Device.ID?
     var booting: Set<Device.ID> = []
+    var failure: String?
     @ObservationIgnored private var props: [String: [String: String]] = [:]
 
     var selected: Device? { devices.first { $0.id == selection } }
@@ -98,6 +104,7 @@ final class Hub {
     }
 
     func refresh() async {
+        async let simulators = AppleSimulator.list()
         let serials = await adb("devices").split(separator: "\n").dropFirst().compactMap { line -> String? in
             let f = line.split(separator: "\t")
             return f.count == 2 && f[1] == "device" ? String(f[0]) : nil
@@ -127,12 +134,28 @@ final class Hub {
         }
         list.sort { ($0.isEmulator ? 1 : 0, $0.name) < ($1.isEmulator ? 1 : 0, $1.name) }
 
-        booting.subtract(list.filter { $0.serial != nil }.map(\.id))
+        list += await simulators
+        simulatorSessions.retain(Set(list.compactMap { $0.simulator?.isBooted == true ? $0.simulator?.udid : nil }))
+        androidSessions.retain(Set(list.compactMap(\.serial)))
+        booting.subtract(list.filter { $0.simulator == nil && $0.isRunning }.map(\.id))
         if devices != list { devices = list }
         if selected == nil { selection = list.first { $0.serial != nil }?.id ?? list.first?.id }
     }
 
     func boot(_ device: Device) {
+        if let simulator = device.simulator {
+            guard !booting.contains(device.id) else { return }
+            booting.insert(device.id)
+            Task {
+                defer { booting.remove(device.id) }
+                do {
+                    if simulator.state != "Booting" { try await Simctl.run(["boot", simulator.udid]).checked() }
+                    try await Simctl.run(["bootstatus", simulator.udid, "-b"]).checked()
+                    await refresh()
+                } catch { failure = String(describing: error) }
+            }
+            return
+        }
         guard let avd = device.avd, !booting.contains(device.id) else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: SDK.emulator)
@@ -153,6 +176,13 @@ final class Hub {
     }
 
     func shutdown(_ device: Device) {
+        if let simulator = device.simulator {
+            Task {
+                do { try await Simctl.run(["shutdown", simulator.udid]).checked(); await refresh() }
+                catch { failure = String(describing: error) }
+            }
+            return
+        }
         guard let serial = device.serial else { return }
         Task { await adb("-s", serial, "emu", "kill") }
     }

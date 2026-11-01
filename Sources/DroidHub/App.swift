@@ -35,8 +35,9 @@ struct ContentView: View {
         @Bindable var hub = hub
         NavigationSplitView {
             List(selection: $hub.selection) {
-                section("Devices", hub.devices.filter { !$0.isEmulator })
+                section("Devices", hub.devices.filter { !$0.isEmulator && $0.simulator == nil })
                 section("Emulators", hub.devices.filter(\.isEmulator))
+                section("Simulators", hub.devices.filter { $0.simulator != nil })
             }
             .searchable(text: $query, placement: .sidebar)
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
@@ -46,12 +47,25 @@ struct ContentView: View {
             .sheet(isPresented: $creating) { NewEmulatorSheet().environment(hub) }
         } detail: {
             if let device = hub.selected {
-                DeviceView(device: device, panel: $panel).id(device.id)
+                if let simulator = device.simulator {
+                    AppleSimulatorView(device: device, simulator: simulator).id(device.id)
+                } else if let apple = device.appleDevice {
+                    AppleDeviceView(device: device, apple: apple).id(device.id)
+                } else {
+                    DeviceView(device: device, panel: $panel).id(device.id)
+                }
             } else {
-                ContentUnavailableView("No Devices", systemImage: "smartphone", description: Text("Create an emulator in Android Studio or plug in a device."))
+                ContentUnavailableView("No Devices", systemImage: "smartphone", description: Text("Create an emulator or connect a device. Apple simulators use your selected Xcode installation."))
             }
         }
         .task { await hub.poll() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            hub.androidSessions.retain([])
+            hub.simulatorSessions.retain([])
+        }
+        .alert("Device Action Failed", isPresented: Binding(get: { hub.failure != nil }, set: { if !$0 { hub.failure = nil } })) {
+            Button("OK", role: .cancel) { hub.failure = nil }
+        } message: { Text(hub.failure ?? "") }
         .onAppear { if !welcomed { openWindow(id: "welcome") } }
     }
 
@@ -71,7 +85,7 @@ struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            DeviceBadge(kind: device.kind, selected: hub.selection == device.id, running: device.serial != nil)
+            DeviceBadge(kind: device.kind, selected: hub.selection == device.id, running: device.isRunning, simulator: device.simulator != nil || device.appleDevice != nil)
             VStack(alignment: .leading, spacing: 1) {
                 Text(device.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 Text(hub.booting.contains(device.id) ? "Booting…" : device.detail)
@@ -84,6 +98,10 @@ struct DeviceRow: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
+            if device.simulator != nil {
+                if device.isRunning { Button("Shut Down") { hub.shutdown(device) } }
+                else { Button("Boot") { hub.boot(device) }.disabled(hub.booting.contains(device.id)) }
+            }
             if device.isEmulator {
                 if device.serial == nil {
                     Button("Boot") { hub.boot(device) }
@@ -118,9 +136,15 @@ struct DeviceView: View {
     @Environment(Hub.self) private var hub
     let device: Device
     @Binding var panel: Panel?
-    @State private var mirror: Mirror?
-    @State private var size = CGSize(width: 1080, height: 2400)
+    @State private var session: AndroidMirrorSession?
+    @State private var sessionToken: UUID?
+    private var mirror: Mirror? {
+        session?.isConnected == true && orientationReady && (geometryReady || session?.geometry != nil) ? session?.mirror : nil
+    }
+    private var size: CGSize { session?.size ?? CGSize(width: 1080, height: 2400) }
     @State private var displayGeometry: DisplayGeometry?
+    @State private var geometryReady = false
+    @State private var orientationReady = false
     @State private var failure: String?
     @State private var attempt = 0
     @State private var dropTargeted = false
@@ -138,7 +162,7 @@ struct DeviceView: View {
     private var displayBusy: Bool { displayController?.isBusy == true }
     private var videoRotation: QuarterTurn { displayController?.orientation ?? .zero }
     private var displayCorners: DisplayCorners {
-        (displayGeometry?.videoCorners(size: size, naturalOrientation: device.isEmulator) ?? .square).rotated(videoRotation)
+        ((displayGeometry ?? session?.geometry)?.videoCorners(size: size, naturalOrientation: device.isEmulator) ?? .square).rotated(videoRotation)
     }
 
     private var canFold: Bool {
@@ -197,6 +221,8 @@ struct DeviceView: View {
                 presets = []
                 displayController = device.serial.map { hub.displayController(serial: $0, isEmulator: device.isEmulator) }
                 await displayController?.synchronizeOrientation()
+                guard !Task.isCancelled else { return }
+                orientationReady = true
                 foldConfiguration = DeviceActions().foldConfiguration(for: device)
                 foldState = nil
                 let available = await DeviceActions().displayPresets(for: device)
@@ -235,6 +261,9 @@ struct DeviceView: View {
             .onChange(of: displayController?.failure) { _, failure in
                 if let failure { actionFailure = failure }
             }
+            .onChange(of: session?.failure) { _, error in
+                if let error { failure = error }
+            }
             .onChange(of: displayController?.revision) { _, _ in
                 Task { await mirror?.refreshDensity() }
             }
@@ -269,34 +298,35 @@ struct DeviceView: View {
 
     @ViewBuilder private var content: some View {
         if let serial = device.serial {
-            Phone(size: videoRotation.size(size), corners: displayCorners) {
+            ZStack {
                 if let mirror {
-                    Screen(mirror: mirror, rotation: videoRotation, acceptsFiles: !transferring, receiveFiles: receive, dropTargeted: { dropTargeted = $0 })
-                } else {
-                    Color.black.overlay {
-                        if let failure {
-                            VStack(spacing: 12) {
-                                Text(failure).foregroundStyle(.white).multilineTextAlignment(.center)
-                                Button("Retry") { attempt += 1 }
-                            }
-                            .padding()
-                        } else {
-                            ProgressView().controlSize(.large).tint(.white)
-                        }
+                    Phone(size: videoRotation.size(size), corners: displayCorners) {
+                        Screen(mirror: mirror, rotation: videoRotation, acceptsFiles: !transferring, receiveFiles: receive, dropTargeted: { dropTargeted = $0 })
                     }
+                    .padding(32)
+                    .transition(.opacity)
+                } else if let failure {
+                    ContentUnavailableView {
+                        Label("Couldn't Connect", systemImage: "exclamationmark.triangle")
+                    } description: { Text(failure) } actions: { Button("Retry") { attempt += 1 } }
+                } else {
+                    ProgressView("Connecting to \(device.name)…")
                 }
             }
-            .padding(32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.easeOut(duration: 0.18), value: mirror != nil)
             .safeAreaInset(edge: .bottom) {
                 if let mirror { controls(mirror) }
             }
             .task(id: "\(serial)#\(attempt)") { await connect(serial) }
             .task(id: size) {
+                geometryReady = false
                 while !Task.isCancelled {
                     let geometry = try? await DeviceActions().displayGeometry(serial: serial)
                     guard !Task.isCancelled else { return }
                     displayGeometry = geometry
+                    session?.geometry = geometry
+                    geometryReady = true
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 }
             }
@@ -441,29 +471,22 @@ struct DeviceView: View {
     }
 
     private func connect(_ serial: String) async {
-        mirror = nil
         failure = nil
-        let m = Mirror(serial: serial)
-        m.onSize = { [weak m] new in
-            size = new
-            // Resizable modes can change density as well as resolution.
-            if !presets.isEmpty { Task { await m?.refreshDensity() } }
-        }
-        m.onClose = { [weak m] in
-            m?.stop()  // frees the server and the adb forward now, not at the next Retry
-            mirror = nil
-            failure = "Disconnected"
+        let lease = hub.androidSessions.acquire(serial) { AndroidMirrorSession(serial: serial) }
+        let current = lease.session
+        session = current; sessionToken = lease.token
+        defer {
+            hub.androidSessions.release(lease)
+            if sessionToken == lease.token { session = nil; sessionToken = nil }
         }
         do {
-            try await m.start()
+            try await current.start()
+            while !Task.isCancelled { try await Task.sleep(for: .seconds(3600)) }
+        } catch is CancellationError {
         } catch {
-            m.stop()
+            hub.androidSessions.discard(lease)
             failure = "\(error)"
-            return
         }
-        mirror = m
-        while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
-        m.stop()
     }
 }
 
@@ -471,6 +494,7 @@ struct DeviceView: View {
 struct Phone<Content: View>: View {
     let size: CGSize
     let corners: DisplayCorners
+    var clipsContent = true
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -498,7 +522,7 @@ struct Phone<Content: View>: View {
                     .strokeBorder(.black.opacity(0.8), lineWidth: 1)
                 content
                     .frame(width: size.width * k, height: size.height * k)
-                    .clipShape(screen, style: FillStyle(antialiased: true))
+                    .clipShape(clipsContent ? AnyShape(screen) : AnyShape(Rectangle()), style: FillStyle(antialiased: true))
                     .overlay {
                         screen.strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
                             .allowsHitTesting(false)

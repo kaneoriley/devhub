@@ -8,13 +8,17 @@ struct MirrorError: Error, CustomStringConvertible {
 
 /// Client for the scrcpy server: pushes it to the device, decodes its H.264 stream
 /// into `layer` and sends input back. Protocol: scrcpy doc/develop.md, "Protocol".
-final class Mirror {
+// Mutable UI state is accessed on the main actor; each socket has its own reader
+// thread and control writes are serialized. Socket shutdown is safe across threads.
+final class Mirror: @unchecked Sendable {
     let serial: String
     let layer = AVSampleBufferDisplayLayer()
     var onSize: ((CGSize) -> Void)?
     var onClose: (() -> Void)?
     /// Current video size in device pixels. Main thread only.
     private(set) var size = CGSize.zero
+    /// Offscreen sessions keep decoding reference frames but cannot replace the Mac clipboard.
+    var clipboardEnabled = false
 
     private var server: Process?
     private var video: Socket?
@@ -22,6 +26,8 @@ final class Mirror {
     private var port = ""
     private var closed = false
     private var log: Pipe?
+    private var densityTask: Task<Void, Never>?
+    private var remoteJar: String?
     /// Screen density in dpi, read from the device on start. Main thread only.
     private var density = 420.0
     private let writes = DispatchQueue(label: "droidhub.control")
@@ -32,17 +38,22 @@ final class Mirror {
         layer.backgroundColor = .black
     }
 
-    func start() async throws {
+    @MainActor func start() async throws {
+        var started = false
+        defer { if !started { stop() } }
         guard let jar = Bundle.main.url(forResource: "scrcpy-server", withExtension: nil),
               let version = Bundle.main.object(forInfoDictionaryKey: "ScrcpyVersion") as? String
         else { throw MirrorError("scrcpy-server is missing from the bundle, run ./build.sh") }
 
         let scid = String(format: "%08x", UInt32.random(in: 0..<0x7fff_ffff))
-        let remote = "/data/local/tmp/droidhub-server.jar"
-        await adb("-s", serial, "push", jar.path, remote)
+        let remote = "/data/local/tmp/droidhub-server-\(scid).jar"
+        remoteJar = remote
+        async let upload = runADB(["-s", serial, "push", jar.path, remote])
         port = await adb("-s", serial, "forward", "tcp:0", "localabstract:scrcpy_\(scid)").trimmingCharacters(in: .whitespacesAndNewlines)
+        try await upload.checked()
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
         guard let localPort = UInt16(port) else { throw MirrorError("adb forward failed") }
-        await refreshDensity()
 
         let server = Process()
         server.executableURL = URL(fileURLWithPath: SDK.adb)
@@ -62,9 +73,13 @@ final class Mirror {
                 return (video, try Socket.connect(port: localPort))
             }.value
         } catch {
-            server.terminate()
+            if server.isRunning { server.terminate() }
             let out = await Task.detached { String(decoding: log.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) }.value
             throw MirrorError(out.split(separator: "\n").last { $0.contains("ERROR") }.map(String.init) ?? "scrcpy server didn't start")
+        }
+        guard !closed, !Task.isCancelled else {
+            video.shutdown(); control.shutdown()
+            throw CancellationError()
         }
         // Keep draining the server log, or it blocks once the pipe fills up. At EOF the
         // handler fires nonstop with empty reads and pins a core, so it removes itself.
@@ -78,15 +93,30 @@ final class Mirror {
         self.control = control
         Thread { self.readVideo(video) }.start()
         Thread { self.readControl(control) }.start()
+        densityTask = Task { @MainActor [weak self] in await self?.refreshDensity() }
+        started = true
     }
 
-    func stop() {
+    @MainActor func stop() {
         closed = true
+        densityTask?.cancel(); densityTask = nil
         log?.fileHandleForReading.readabilityHandler = nil
         video?.shutdown()
         control?.shutdown()
-        server?.terminate()
-        let args = ["-s", serial, "forward", "--remove", "tcp:\(port)"]
+        if let server, server.isRunning { server.terminate() }
+        if !port.isEmpty {
+            let args = ["-s", serial, "forward", "--remove", "tcp:\(port)"]
+            port = ""
+            Self.cleanup(args)
+        }
+        if let remoteJar {
+            let args = ["-s", serial, "shell", "rm", "-f", remoteJar]
+            Self.cleanup(args)
+        }
+    }
+
+    /// adb cleanup must never block selection changes or AppKit's exit callbacks.
+    private static func cleanup(_ args: [String]) {
         Task.detached { _ = await exec(SDK.adb, args) }
     }
 
@@ -154,9 +184,9 @@ final class Mirror {
     /// On a forward tunnel adb accepts the connection even before the server listens,
     /// so the server's dummy byte is what proves it's really there.
     private static func connect(port: UInt16) throws -> Socket {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if let s = try? Socket.connect(port: port), s.read(1) != nil { return s }
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.02)
         }
         throw MirrorError("scrcpy server didn't start")
     }
@@ -209,6 +239,7 @@ final class Mirror {
                 guard let len = s.read(4), let text = s.read(Int(len.int(0) as UInt32)) else { return }
                 let string = String(decoding: text, as: UTF8.self)
                 DispatchQueue.main.async {
+                    guard !self.closed, self.clipboardEnabled else { return }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(string, forType: .string)
                 }
@@ -355,7 +386,7 @@ enum H264 {
     }
 }
 
-final class Socket {
+final class Socket: @unchecked Sendable {
     private let fd: Int32
     private init(fd: Int32) { self.fd = fd }
     deinit { close(fd) }

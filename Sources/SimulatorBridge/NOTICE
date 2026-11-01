@@ -1,0 +1,4 @@
+Simulator protocol declarations and HID wire formats were verified against Xcode
+and Meta's idb source (https://github.com/meta/idb), copyright Meta Platforms,
+Inc. and affiliates, licensed under the MIT license in ThirdParty/idb-LICENSE.
+No Apple frameworks are redistributed; the adapter loads the user's Xcode.

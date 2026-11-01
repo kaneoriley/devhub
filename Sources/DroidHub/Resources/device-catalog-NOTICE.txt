@@ -1,0 +1,9 @@
+Android hardware profiles from the Android Open Source Project.
+Repository: https://android.googlesource.com/platform/tools/base
+Revision: 45628254f0f8a9bb3755d73f3d30ca78fbb2153d
+Source: https://android.googlesource.com/platform/tools/base/+/45628254f0f8a9bb3755d73f3d30ca78fbb2153d/sdklib/src/main/resources/com/android/sdklib/devices/
+Files: nexus.xml, devices.xml (unmodified upstream definitions).
+Copyright The Android Open Source Project. Apache License 2.0.
+License: android-tools-LICENSE.txt
+Update: python3 scripts/update_device_catalog.py
+Reproduce: python3 scripts/update_device_catalog.py --revision 45628254f0f8a9bb3755d73f3d30ca78fbb2153d

@@ -15,6 +15,8 @@
 - (id)defaultDeviceSetWithError:(NSError **)error;
 - (NSArray *)availableDevices;
 - (NSUUID *)UDID;
+- (id)deviceType;
+- (NSDictionary *)capabilities;
 - (id)io;
 - (NSArray *)ioPorts;
 - (id)descriptor;
@@ -96,6 +98,7 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
 @property dispatch_queue_t inputQueue;
 @property BOOL stopped;
 @property BOOL touching;
+@property NSDictionary<NSNumber *,NSNumber *> *nativeRotations;
 @property (readwrite) NSInteger selectedScreen;
 @property (readwrite) BOOL modernInput;
 @end
@@ -118,6 +121,16 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
         id set=[context defaultDeviceSetWithError:error];
         for(id candidate in [set availableDevices])if([[[candidate UDID] UUIDString] caseInsensitiveCompare:identifier]==NSOrderedSame){_device=candidate;break;}
         if(!_device){if(error)*error=DHError(@"The simulator is no longer available.");return nil;}
+        NSMutableDictionary *rotations=[NSMutableDictionary dictionary];
+        id type=[_device deviceType];
+        if([type respondsToSelector:@selector(capabilities)]) {
+            NSDictionary *capabilities=[type capabilities][@"capabilities"];
+            for(NSDictionary *display in capabilities[@"displays"]) {
+                NSNumber *identifier=display[@"screenID"], *rotation=display[@"nativeRotation"]?:display[@"nativeOrientation"];
+                if([identifier isKindOfClass:NSNumber.class]&&[rotation isKindOfClass:NSNumber.class])rotations[identifier]=rotation;
+            }
+        }
+        _nativeRotations=[rotations copy];
     } @catch(NSException *e) {if(error)*error=DHError(e.reason);return nil;}
     return self;
 }
@@ -322,6 +335,7 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     }
     });
 }
+- (NSInteger)nativeRotationForScreen:(NSInteger)screenID { return [_nativeRotations[@(screenID)] integerValue]; }
 - (void)setFolded:(BOOL)folded {
     CFAbsoluteTime began=CFAbsoluteTimeGetCurrent();
     dispatch_async(_inputQueue,^{

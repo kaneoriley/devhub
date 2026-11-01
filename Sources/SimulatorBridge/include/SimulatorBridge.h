@@ -17,6 +17,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)key:(uint32_t)usage pressed:(BOOL)pressed;
 - (void)button:(uint32_t)usage;
 - (void)orient:(NSInteger)orientation;
+/// Mounting rotation in degrees from the device type's display capabilities.
+- (NSInteger)nativeRotationForScreen:(NSInteger)screenID;
 - (void)setFolded:(BOOL)folded;
 @property (nonatomic, copy, nullable) void (^errorHandler)(NSString *message);
 @end

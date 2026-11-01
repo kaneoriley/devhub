@@ -156,7 +156,8 @@ enum Simctl {
     let simulator: AppleSimulator
     let layer = AVSampleBufferDisplayLayer()
     var size = CGSize(width: 1080, height: 2400)
-    var orientation = QuarterTurn.zero
+    private var rotation = SimulatorRotation()
+    var orientation: QuarterTurn { rotation.orientation }
     var contour = SimulatorContour.rectangle
     var selectedScreen = 0
     var screenMask: CGImage?
@@ -215,10 +216,8 @@ enum Simctl {
         guard !closed, active else { return }
         let nextSize = CGSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
         let changedScreen = selectedScreen != screen
-        if !receivedFrame || changedScreen {
-            orientation = SimulatorOrientation.interface(reported)
-            receivedFrame = true
-        }
+        rotation.receive(reported, screen: screen)
+        receivedFrame = true
         selectedScreen = screen
         if simulator.isFoldable {
             let state: FoldState = screen == 1 ? .closed : .opened
@@ -277,8 +276,9 @@ enum Simctl {
     func home() { button(0x40) }
     func recents() { home(); Task { try? await Task.sleep(for: .milliseconds(120)); home() } }
     func rotate() {
-        orientation = orientation.next
-        bridge?.orient(SimulatorOrientation.device(orientation))
+        guard let bridge else { return }
+        let native = QuarterTurn(bridge.nativeRotation(forScreen: selectedScreen) / 90)
+        bridge.orient(rotation.requestNext(nativeRotation: native))
     }
     func fold(_ folded: Bool) {
         foldController.select(folded ? .closed : .opened) { [weak self] target in
@@ -372,4 +372,26 @@ enum SimulatorOrientation {
     // (reported as 3) needs a clockwise turn when presented in the host window.
     static func interface(_ value: Int) -> QuarterTurn { QuarterTurn([1: 0, 2: 2, 3: 1, 4: 3][value] ?? 0) }
     static func device(_ turn: QuarterTurn) -> Int { [1, 3, 2, 4][turn.value] }
+}
+
+/// The framebuffer's reported UI orientation controls rendering. Device input
+/// uses the screen's native mounting rotation, which can differ on foldables.
+struct SimulatorRotation {
+    private(set) var orientation = QuarterTurn.zero
+    private var requested: QuarterTurn?
+    private var screen: Int?
+
+    mutating func receive(_ reported: Int, screen: Int) {
+        if self.screen != screen { requested = nil }
+        self.screen = screen
+        guard (1...4).contains(reported) else { return }
+        orientation = SimulatorOrientation.interface(reported)
+        if requested == orientation { requested = nil }
+    }
+
+    mutating func requestNext(nativeRotation: QuarterTurn) -> Int {
+        let next = (requested ?? orientation).next
+        requested = next
+        return SimulatorOrientation.device(QuarterTurn(next.value + nativeRotation.value))
+    }
 }

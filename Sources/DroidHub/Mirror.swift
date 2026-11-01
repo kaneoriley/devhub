@@ -129,9 +129,14 @@ final class Mirror: @unchecked Sendable {
 
     // MARK: Input (main thread). Points are normalized to 0...1.
 
-    func touch(_ action: UInt8, at point: CGPoint) {
+    func touch(_ action: UInt8, at point: CGPoint, pointerID: Int64 = -2) {
         guard let (x, y, w, h) = pixels(point) else { return }
-        send(Control.touch(action, x: x, y: y, width: w, height: h))
+        send(Control.touch(action, x: x, y: y, width: w, height: h, pointerID: pointerID))
+    }
+
+    func touchPair(_ phase: TwoFingerPhase, first: CGPoint, second: CGPoint) {
+        guard let (x, y, w, h) = pixels(first), let (x2, y2, _, _) = pixels(second) else { return }
+        send(Control.touchPair(phase, first: (x, y), second: (x2, y2), width: w, height: h))
     }
 
     func scroll(at point: CGPoint, dx: Float, dy: Float) {
@@ -268,14 +273,22 @@ enum Control {
         return d
     }
 
-    static func touch(_ action: UInt8, x: Int32, y: Int32, width: UInt16, height: UInt16) -> Data {
+    static func touch(_ action: UInt8, x: Int32, y: Int32, width: UInt16, height: UInt16, pointerID: Int64 = -2) -> Data {
         var d = Data([2, action])
-        d.append(be: UInt64(bitPattern: -2))  // generic finger, so apps see a touchscreen
+        d.append(be: UInt64(bitPattern: pointerID))  // generic finger, so apps see a touchscreen
         d.append(position(x, y, width, height))
         d.append(be: action == 1 ? UInt16(0) : 0xffff)  // pressure
         d.append(be: UInt32(0))  // action button
         d.append(be: UInt32(0))  // buttons
         return d
+    }
+
+    static func touchPair(_ phase: TwoFingerPhase, first: (Int32, Int32), second: (Int32, Int32), width: UInt16, height: UInt16) -> Data {
+        let action: UInt8 = phase == .began ? 0 : phase == .moved ? 2 : 1
+        let primary = touch(action, x: first.0, y: first.1, width: width, height: height)
+        let secondary = touch(action, x: second.0, y: second.1, width: width, height: height, pointerID: -3)
+        // Lift the secondary contact first, leaving the primary for ACTION_UP.
+        return phase == .ended ? secondary + primary : primary + secondary
     }
 
     /// dx/dy in wheel notches, clamped to ±16.

@@ -150,20 +150,29 @@ struct SimulatorScreen: NSViewRepresentable {
 
 final class SimulatorScreenView: NSView, NSTextInputClient {
     private let mirror: SimulatorMirror
-    var rotation = QuarterTurn.zero { didSet { if rotation != oldValue { releaseInput(); needsLayout = true } } }
+    var rotation = QuarterTurn.zero {
+        willSet { if newValue != rotation { releaseInput() } }
+        didSet { if rotation != oldValue { needsLayout = true } }
+    }
     private var marked: String?
-    private var scrollPoint: CGPoint?
-    private var scrollEdge = SimulatorTouchEdge.none
+    private var scrollGesture = SimulatorScrollGesture()
+    private var pinchGesture = SimulatorPinchGesture()
     private var mousePoint: CGPoint?
     private var mouseEdge = SimulatorTouchEdge.none
     private var scrollEnd: Task<Void, Never>?
-    private var pinching = false
     private var modifiers: Set<UInt32> = []
-    private var twoFingers = false
+    private lazy var twoFingerInput = TwoFingerInput(view: self, beginPreview: { [weak self] in self?.releaseSingleInput() }) { [weak self] points, phase in
+        guard let self, self.bounds.width > 0, self.bounds.height > 0 else { return }
+        func source(_ p: CGPoint) -> CGPoint {
+            self.rotation.sourcePoint(CGPoint(x: p.x / self.bounds.width, y: p.y / self.bounds.height))
+        }
+        self.mirror.touch(source(points.first), phase: phase.rawValue, second: source(points.second))
+    }
     init(mirror: SimulatorMirror) {
         self.mirror = mirror
         super.init(frame: .zero)
         wantsLayer = true; layer?.addSublayer(mirror.layer)
+        _ = twoFingerInput
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Simulator screen")
         NotificationCenter.default.addObserver(self, selector: #selector(releaseOnBlur), name: NSWindow.didResignKeyNotification, object: nil)
     }
@@ -177,6 +186,7 @@ final class SimulatorScreenView: NSView, NSTextInputClient {
     override func viewDidMoveToWindow() { DispatchQueue.main.async { self.window?.makeFirstResponder(self) } }
     override func layout() {
         super.layout()
+        twoFingerInput.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
         mirror.layer.bounds = CGRect(origin: .zero, size: rotation.size(bounds.size))
         mirror.layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
@@ -199,46 +209,93 @@ final class SimulatorScreenView: NSView, NSTextInputClient {
     private func touch(_ event: NSEvent, phase: Int) {
         let p = point(event)
         mousePoint = phase == 2 ? nil : p
-        mirror.touch(p, phase: phase, edge: mouseEdge, second: twoFingers ? CGPoint(x: 1-p.x, y: 1-p.y) : nil)
+        mirror.touch(p, phase: phase, edge: mouseEdge)
     }
     private func edge(_ event: NSEvent) -> SimulatorTouchEdge {
         SimulatorTouchEdge.detect(at: convert(event.locationInWindow, from: nil), in: bounds.size).sourceEdge(rotation: rotation)
     }
+    override func updateTrackingAreas() { super.updateTrackingAreas(); twoFingerInput.updateTracking() }
+    override func mouseMoved(with event: NSEvent) { twoFingerInput.hover(event) }
+    override func mouseEntered(with event: NSEvent) { twoFingerInput.hover(event) }
+    override func mouseExited(with event: NSEvent) { twoFingerInput.exited() }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        releaseTouches()
-        twoFingers = event.modifierFlags.contains(.option)
-        mouseEdge = twoFingers ? .none : edge(event)
+        endScrolling()
+        if let point = mousePoint { mirror.touch(point, phase: 2, edge: mouseEdge); mousePoint = nil }
+        if twoFingerInput.mouseDown(event) { return }
+        mouseEdge = edge(event)
         touch(event, phase: 0)
     }
-    override func mouseDragged(with event: NSEvent) { if mousePoint != nil { touch(event, phase: 1) } }
-    override func mouseUp(with event: NSEvent) { if mousePoint != nil { touch(event, phase: 2) }; twoFingers = false; mouseEdge = .none }
+    override func mouseDragged(with event: NSEvent) {
+        if twoFingerInput.mouseDragged(event) { return }
+        if mousePoint != nil { touch(event, phase: 1) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        if twoFingerInput.mouseUp(event) { return }
+        if mousePoint != nil { touch(event, phase: 2) }
+        mouseEdge = .none
+    }
     override func rightMouseDown(with event: NSEvent) { mirror.home() }
-    override func scrollWheel(with event: NSEvent) {
-        scrollEnd?.cancel()
-        guard mousePoint == nil, bounds.width > 0, bounds.height > 0 else { return }
-        if scrollPoint == nil { scrollEdge = edge(event); scrollPoint = point(event); mirror.touch(scrollPoint!, phase: 0, edge: scrollEdge) }
-        let delta = rotation.sourceVector(CGPoint(x: event.scrollingDeltaX / bounds.width, y: event.scrollingDeltaY / bounds.height))
-        let next = CGPoint(x: min(max(scrollPoint!.x + delta.x, 0.01), 0.99), y: min(max(scrollPoint!.y + delta.y, 0.01), 0.99))
-        scrollPoint = next; mirror.touch(next, phase: 1, edge: scrollEdge)
-        scrollEnd = Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
-            if let point = scrollPoint { mirror.touch(point, phase: 2, edge: scrollEdge) }; scrollPoint = nil; scrollEdge = .none
+    private func send(_ contacts: [SimulatorGestureContact]) {
+        func source(_ p: CGPoint) -> CGPoint {
+            rotation.sourcePoint(CGPoint(x: p.x / bounds.width, y: p.y / bounds.height))
         }
+        for contact in contacts {
+            mirror.touch(source(contact.point), phase: contact.phase, second: contact.second.map(source))
+        }
+    }
+    private func endScrolling() {
+        scrollEnd?.cancel(); scrollEnd = nil
+        send(scrollGesture.end())
+        send(pinchGesture.end())
+    }
+    private func scheduleScrollEnd() {
+        scrollEnd?.cancel()
+        scrollEnd = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            endScrolling()
+        }
+    }
+    override func scrollWheel(with event: NSEvent) {
+        guard mousePoint == nil, !twoFingerInput.active, bounds.width > 0, bounds.height > 0 else { return }
+        let delta = SimulatorScrollGesture.delta(x: event.scrollingDeltaX, y: event.scrollingDeltaY, precise: event.hasPreciseScrollingDeltas)
+        guard delta != .zero else { return }
+        let cursor = convert(event.locationInWindow, from: nil)
+        if event.modifierFlags.contains(.option) {
+            send(scrollGesture.end())
+            send(pinchGesture.magnify(at: cursor, amount: delta.y / 240, size: bounds.size))
+        } else {
+            send(pinchGesture.end())
+            send(scrollGesture.move(at: cursor, delta: delta, size: bounds.size))
+        }
+        scheduleScrollEnd()
+    }
+    override func magnify(with event: NSEvent) {
+        guard mousePoint == nil, !twoFingerInput.active, bounds.width > 0, bounds.height > 0 else { return }
+        scrollEnd?.cancel()
+        send(scrollGesture.end())
+        send(pinchGesture.magnify(at: convert(event.locationInWindow, from: nil), amount: event.magnification, size: bounds.size))
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) { endScrolling() }
+        else { scheduleScrollEnd() }
     }
     override func keyDown(with event: NSEvent) { interpretKeyEvents([event]) }
     override func flagsChanged(with event: NSEvent) {
-        let mapping: [(NSEvent.ModifierFlags, UInt32)] = [(.shift,0xe1),(.control,0xe0),(.option,0xe2),(.command,0xe3)]
+        twoFingerInput.modifiersChanged(event.modifierFlags)
+        // Command controls the host's gesture preview and keyboard shortcuts.
+        let mapping: [(NSEvent.ModifierFlags, UInt32)] = [(.shift,0xe1),(.control,0xe0),(.option,0xe2)]
         for (flag, usage) in mapping {
             let down = event.modifierFlags.contains(flag)
             if down != modifiers.contains(usage) { mirror.key(usage, pressed: down); if down { modifiers.insert(usage) } else { modifiers.remove(usage) } }
         }
     }
     private func releaseTouches() {
-        scrollEnd?.cancel()
-        if let point = scrollPoint { mirror.touch(point, phase: 2, edge: scrollEdge); scrollPoint = nil }
-        if let point = mousePoint { mirror.touch(point, phase: 2, edge: mouseEdge, second: twoFingers ? CGPoint(x: 1-point.x, y: 1-point.y) : nil); mousePoint = nil }
-        scrollEdge = .none; mouseEdge = .none; twoFingers = false
+        twoFingerInput.reset()
+        releaseSingleInput()
+    }
+    private func releaseSingleInput() {
+        endScrolling()
+        if let point = mousePoint { mirror.touch(point, phase: 2, edge: mouseEdge); mousePoint = nil }
+        mouseEdge = .none
     }
     func releaseInput() {
         releaseTouches()

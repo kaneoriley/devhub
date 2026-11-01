@@ -594,6 +594,8 @@ struct Screen: NSViewRepresentable {
         return view
     }
 
+    static func dismantleNSView(_ view: ScreenView, coordinator: ()) { view.releaseInput() }
+
     func updateNSView(_ view: ScreenView, context: Context) {
         view.rotation = rotation
         view.acceptsFiles = acceptsFiles
@@ -606,12 +608,21 @@ struct Screen: NSViewRepresentable {
 final class ScreenView: NSView {
     private let mirror: Mirror
     var rotation = QuarterTurn.zero {
+        willSet { if newValue != rotation { releaseInput() } }
         didSet { if rotation != oldValue { needsLayout = true } }
     }
     var acceptsFiles = true
     var receiveFiles: (([URL]) -> Bool)?
     var dropTargeted: ((Bool) -> Void)?
     private var marked: String?
+    private var mousePoint: CGPoint?
+    private lazy var twoFingerInput = TwoFingerInput(view: self, beginPreview: { [weak self] in self?.releaseSingleInput() }) { [weak self] points, phase in
+        guard let self, self.bounds.width > 0, self.bounds.height > 0 else { return }
+        func source(_ p: CGPoint) -> CGPoint {
+            self.rotation.sourcePoint(CGPoint(x: p.x / self.bounds.width, y: p.y / self.bounds.height))
+        }
+        self.mirror.touchPair(phase, first: source(points.first), second: source(points.second))
+    }
     private static let ctrl: UInt32 = 0x3000  // META_CTRL_ON | META_CTRL_LEFT_ON
     private static let commands: [Selector: (UInt32, UInt32)] = [
         #selector(NSResponder.deleteBackward(_:)): (67, 0),
@@ -637,7 +648,20 @@ final class ScreenView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Device screen")
+        _ = twoFingerInput
+        NotificationCenter.default.addObserver(self, selector: #selector(releaseOnBlur), name: NSWindow.didResignKeyNotification, object: nil)
         registerForDraggedTypes([.fileURL])
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func releaseOnBlur() { releaseInput() }
+    override func resignFirstResponder() -> Bool { releaseInput(); return true }
+    func releaseInput() {
+        twoFingerInput.reset()
+        releaseSingleInput()
+    }
+    private func releaseSingleInput() {
+        if let point = mousePoint { mirror.touch(1, at: point); mousePoint = nil }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -670,6 +694,7 @@ final class ScreenView: NSView {
 
     override func layout() {
         super.layout()
+        twoFingerInput.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         mirror.layer.bounds = CGRect(origin: .zero, size: rotation.size(bounds.size))
@@ -683,16 +708,32 @@ final class ScreenView: NSView {
         return rotation.sourcePoint(CGPoint(x: p.x / bounds.width, y: p.y / bounds.height))
     }
 
+    override func updateTrackingAreas() { super.updateTrackingAreas(); twoFingerInput.updateTracking() }
+    override func mouseMoved(with event: NSEvent) { twoFingerInput.hover(event) }
+    override func mouseEntered(with event: NSEvent) { twoFingerInput.hover(event) }
+    override func mouseExited(with event: NSEvent) { twoFingerInput.exited() }
+    override func flagsChanged(with event: NSEvent) {
+        twoFingerInput.modifiersChanged(event.modifierFlags)
+    }
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        mirror.touch(0, at: point(event))
+        if twoFingerInput.mouseDown(event) { return }
+        mousePoint = point(event)
+        mirror.touch(0, at: mousePoint!)
     }
-
-    override func mouseDragged(with event: NSEvent) { mirror.touch(2, at: point(event)) }
-    override func mouseUp(with event: NSEvent) { mirror.touch(1, at: point(event)) }
+    override func mouseDragged(with event: NSEvent) {
+        if twoFingerInput.mouseDragged(event) { return }
+        guard mousePoint != nil else { return }
+        mousePoint = point(event); mirror.touch(2, at: mousePoint!)
+    }
+    override func mouseUp(with event: NSEvent) {
+        if twoFingerInput.mouseUp(event) { return }
+        if mousePoint != nil { mirror.touch(1, at: point(event)); mousePoint = nil }
+    }
     override func rightMouseDown(with event: NSEvent) { mirror.key(4) }
 
     override func scrollWheel(with event: NSEvent) {
+        guard !twoFingerInput.active else { return }
         // Trackpads report points and wheels report notches. Converting points at the
         // current zoom keeps the content under the fingers.
         let k = event.hasPreciseScrollingDeltas ? 1 / mirror.pointsPerNotch(viewWidth: rotation.size(bounds.size).width) : 1

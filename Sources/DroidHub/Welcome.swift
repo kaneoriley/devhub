@@ -58,6 +58,7 @@ struct WelcomeView: View {
     @State private var step = 0
     private static let keys = [
         ("Click, drag, scroll", "Touch and scroll the device"),
+        ("Hold ⌘, then click and drag", "Two-finger gesture around the pointer"),
         ("Right click or Esc", "Back"),
         ("⇧⌘H", "Home"),
         ("⌘S", "Screenshot to the Desktop and clipboard"),

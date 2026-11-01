@@ -27,22 +27,42 @@ struct ContentView: View {
     @Environment(Hub.self) private var hub
     @Environment(\.openWindow) private var openWindow
     @AppStorage("welcomed") private var welcomed = false
+    @AppStorage("deviceList.filter") private var deviceFilter = DeviceFilter.all
+    @AppStorage("deviceList.sort") private var deviceSort = DeviceSort.availability
+    @AppStorage("deviceList.showGroups") private var showGroups = true
     @State private var query = ""
     @State private var panel: Panel?
     @State private var creating = false
+
+    private var listing: DeviceList {
+        DeviceList(filter: deviceFilter, sort: deviceSort, showGroups: showGroups,
+                   query: query, recentSelections: hub.recentSelections, booting: hub.booting)
+    }
 
     var body: some View {
         @Bindable var hub = hub
         NavigationSplitView {
             List(selection: $hub.selection) {
-                section("Devices", hub.devices.filter { !$0.isEmulator && $0.simulator == nil })
-                section("Emulators", hub.devices.filter(\.isEmulator))
-                section("Simulators", hub.devices.filter { $0.simulator != nil })
+                ForEach(listing.groups(hub.devices)) { group in
+                    if let title = group.title {
+                        Section(title) { ForEach(group.devices) { DeviceRow(device: $0) } }
+                    } else {
+                        ForEach(group.devices) { DeviceRow(device: $0) }
+                    }
+                }
+            }
+            .overlay {
+                if !hub.devices.isEmpty, listing.groups(hub.devices).isEmpty {
+                    Text("No matching devices").foregroundStyle(.secondary).padding()
+                }
             }
             .searchable(text: $query, placement: .sidebar)
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
             .toolbar {
-                Button("New Emulator", systemImage: "plus") { creating = true }
+                ToolbarItemGroup {
+                    Button("New Emulator", systemImage: "plus") { creating = true }
+                    DeviceListMenu()
+                }
             }
             .sheet(isPresented: $creating) { NewEmulatorSheet().environment(hub) }
         } detail: {
@@ -59,6 +79,9 @@ struct ContentView: View {
             }
         }
         .task { await hub.poll() }
+        .onChange(of: hub.devices, initial: true) { _, _ in validateSelection() }
+        .onChange(of: deviceFilter) { _, _ in validateSelection() }
+        .onChange(of: hub.selection) { _, id in hub.recordSelection(id) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             hub.androidSessions.retain([])
             hub.simulatorSessions.retain([])
@@ -69,11 +92,10 @@ struct ContentView: View {
         .onAppear { if !welcomed { openWindow(id: "welcome") } }
     }
 
-    @ViewBuilder private func section(_ title: String, _ devices: [Device]) -> some View {
-        let shown = devices.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
-        if !shown.isEmpty {
-            Section(title) { ForEach(shown) { DeviceRow(device: $0) } }
-        }
+    private func validateSelection() {
+        guard !hub.devices.isEmpty else { return }
+        if let selection = hub.selection, hub.devices.contains(where: { $0.id == selection && deviceFilter.includes($0) }) { return }
+        hub.selection = listing.groups(hub.devices).first?.devices.first?.id
     }
 }
 
@@ -154,8 +176,9 @@ struct DeviceView: View {
     @State private var presets: [DisplayPreset] = []
     @State private var displayController: DisplayController?
     @State private var foldConfiguration: FoldConfiguration?
-    @State private var foldState: FoldState?
-    @State private var folding = false
+    @State private var foldController = FoldController()
+    private var foldState: FoldState? { foldController.selected }
+    private var folding: Bool { foldController.isBusy }
 
     private var selectedPreset: Int? { displayController?.selectedPreset }
     private var resizing: Bool { displayController?.isChangingPreset == true }
@@ -224,7 +247,6 @@ struct DeviceView: View {
                 guard !Task.isCancelled else { return }
                 orientationReady = true
                 foldConfiguration = DeviceActions().foldConfiguration(for: device)
-                foldState = nil
                 let available = await DeviceActions().displayPresets(for: device)
                 guard !Task.isCancelled else { return }
                 var state: DisplayState?
@@ -238,10 +260,11 @@ struct DeviceView: View {
                 await mirror?.refreshDensity()
                 guard let serial = device.serial else { return }
                 while !Task.isCancelled {
-                    if foldConfiguration != nil {
+                    if foldConfiguration != nil, !folding, !displayBusy {
+                        let revision = foldController.revision
                         let posture = try? await DeviceActions().foldState(serial: serial)
                         guard !Task.isCancelled else { return }
-                        if !folding, !displayBusy { foldState = posture }
+                        if !displayBusy { foldController.synchronize(posture, revision: revision) }
                     }
                     if !presets.isEmpty, !displayBusy, let current = try? await DeviceActions().displayState(serial: serial), !Task.isCancelled, !displayBusy {
                         displayController?.selectedPreset = presetID(for: current)
@@ -259,6 +282,9 @@ struct DeviceView: View {
                 }
             }
             .onChange(of: displayController?.failure) { _, failure in
+                if let failure { actionFailure = failure }
+            }
+            .onChange(of: foldController.failure) { _, failure in
                 if let failure { actionFailure = failure }
             }
             .onChange(of: session?.failure) { _, error in
@@ -321,7 +347,8 @@ struct DeviceView: View {
             }
             .task(id: "\(serial)#\(attempt)") { await connect(serial) }
             .task(id: size) {
-                geometryReady = false
+                // Refresh geometry without tearing down an already presented screen
+                // and its controls when folding changes the video dimensions.
                 while !Task.isCancelled {
                     let geometry = try? await DeviceActions().displayGeometry(serial: serial)
                     guard !Task.isCancelled else { return }
@@ -367,9 +394,14 @@ struct DeviceView: View {
             .padding(4)
             .glassEffect(in: .circle)
             HStack(spacing: 2) {
-                bar("Rotate", "device-rotate", asset: true) { displayController?.rotate() }
+                bar("Rotate", "device-rotate", asset: true) {
+                    Task { @MainActor in
+                        await foldController.waitUntilIdle()
+                        displayController?.rotate()
+                    }
+                }
                     .keyboardShortcut(.rightArrow)
-                    .disabled(resizing || folding)
+                    .disabled(resizing)
                 if !presets.isEmpty {
                     controlDivider
                     ForEach(FormFactor.controlOrder, id: \.self) { factor in
@@ -390,7 +422,7 @@ struct DeviceView: View {
                 }
                 if canFold, let foldConfiguration {
                     controlDivider
-                    ForEach(FoldState.allCases, id: \.self) { state in
+                    ForEach([FoldState.closed, .opened], id: \.self) { state in
                         Button { setFoldState(state) } label: {
                             DeviceIcon(state == .opened ? DeviceKind.tablet : DeviceKind.phone)
                                 .frame(width: 30, height: 30)
@@ -399,7 +431,7 @@ struct DeviceView: View {
                             .foregroundStyle(foldState == state ? Color.accentColor : Color.primary)
                             .buttonStyle(.plain)
                             .help(state.title)
-                            .disabled(!foldConfiguration.states.contains(state) || folding || displayBusy)
+                            .disabled(!foldConfiguration.states.contains(state) || displayBusy)
                             .accessibilityLabel("\(state.title) device")
                             .accessibilityAddTraits(foldState == state ? .isSelected : [])
                     }
@@ -426,14 +458,9 @@ struct DeviceView: View {
     }
 
     private func setFoldState(_ state: FoldState) {
-        guard let serial = device.serial, !folding, !displayBusy, foldState != state else { return }
-        folding = true
-        Task { @MainActor in
-            defer { folding = false }
-            do {
-                try await DeviceActions().setFoldState(state, serial: serial)
-                foldState = state
-            } catch { actionFailure = String(describing: error) }
+        guard let serial = device.serial, !displayBusy else { return }
+        foldController.select(state) { target in
+            try await DeviceActions().setFoldState(target, serial: serial)
         }
     }
 

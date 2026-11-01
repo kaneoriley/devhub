@@ -6,6 +6,7 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
 #import <xpc/xpc.h>
+#import <os/log.h>
 
 // CoreSimulator / SimulatorKit runtime declarations. Protocol signatures and HID
 // wire keys verified against Xcode and Meta's MIT-licensed idb (see NOTICE).
@@ -34,6 +35,12 @@
 @end
 
 static NSError *DHError(NSString *message) { return [NSError errorWithDomain:@"DroidHub.Simulator" code:1 userInfo:@{NSLocalizedDescriptionKey:message}]; }
+static os_log_t DHInputLog(void) {
+    static os_log_t log;
+    static dispatch_once_t once;
+    dispatch_once(&once,^{log=os_log_create("com.eduardo.droidhub.simulator","Input");});
+    return log;
+}
 static BOOL DHSurfaceHasContent(id object) {
     if(!object || CFGetTypeID((__bridge CFTypeRef)object)!=IOSurfaceGetTypeID())return NO;
     IOSurfaceRef surface=(__bridge IOSurfaceRef)object;
@@ -114,7 +121,6 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     } @catch(NSException *e) {if(error)*error=DHError(e.reason);return nil;}
     return self;
 }
-- (NSArray<NSNumber *> *)screenIDs { return [_screens valueForKey:@"identifier"]; }
 - (BOOL)startWithError:(NSError **)error {
     @try {
         for(id port in [[_device io] ioPorts]) {
@@ -150,13 +156,13 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     } @catch(NSException *e) {if(error)*error=DHError(e.reason);[self stop];return NO;}
 }
 - (void)prepareInput {
+    CFAbsoluteTime began=CFAbsoluteTimeGetCurrent();
     if(_stopped)return;
     @try {
-        dispatch_group_t ready=dispatch_group_create();
-        for(NSString *service in @[@"digitizer",@"keyboard",@"button"])
-            dispatch_group_async(ready,dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{[self channel:service];});
-        dispatch_group_wait(ready,DISPATCH_TIME_FOREVER);
-        _modernInput=_channels[@"digitizer"]!=nil;
+        // Indigo multiplexes touch, keys, buttons and VM controls on one peer.
+        // Each extra peer creates another full virtual HID device set in iOS.
+        // Besides wasting time, parallel peers can time out during cold startup.
+        _modernInput=[self channel:@"digitizer"]!=nil;
         if(_stopped)return;
         if(!_modernInput) {
             NSError *error=nil;
@@ -164,6 +170,7 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
             if(legacy)_legacyInput=[[legacy alloc] initWithDevice:_device error:&error];
             if(!_legacyInput && _errorHandler)_errorHandler(error.localizedDescription?:@"Couldn't connect to simulator input. Retry once the simulator is fully booted.");
         }
+        os_log_debug(DHInputLog(),"Input preparation %.3fs, modern=%d",CFAbsoluteTimeGetCurrent()-began,_modernInput);
     } @catch(NSException *e) {if(_errorHandler)_errorHandler(e.reason);}
 }
 - (void)setPaused:(BOOL)paused {
@@ -175,7 +182,10 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     if(_stopped||_paused)return;
     if(_followsActiveDisplays && screen.identifier!=_selectedScreen && DHSurfaceHasContent(screen.surface)) {
         DHSimScreen *current=nil;for(DHSimScreen *s in _screens)if(s.identifier==_selectedScreen){current=s;break;}
-        if(!DHSurfaceHasContent(current.surface))_selectedScreen=screen.identifier;
+        if(!DHSurfaceHasContent(current.surface)) {
+            _selectedScreen=screen.identifier;
+            os_log_debug(DHInputLog(),"Active display changed to %ld",(long)_selectedScreen);
+        }
     }
     void (^handler)(CVPixelBufferRef,NSInteger,NSInteger)=self.frameHandler;
     if(_stopped||screen.identifier!=_selectedScreen||!screen.surface||!handler)return;
@@ -185,9 +195,6 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     if(CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault,surface,NULL,&pixel)!=kCVReturnSuccess)return;
     handler(pixel,screen.orientation,screen.identifier);
     CVPixelBufferRelease(pixel);
-}
-- (void)selectScreen:(NSInteger)screenID {
-    dispatch_async(_queue,^{self.followsActiveDisplays=NO;self.selectedScreen=screenID;for(DHSimScreen *screen in self.screens)[self deliver:screen];});
 }
 - (void)stop {
     if(_stopped)return;
@@ -204,8 +211,10 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     [_screens removeAllObjects];_frameHandler=nil;
 }
 - (void)cleanupInput {
-    for(DHSimChannel *channel in _channels.allValues)if(channel.connection)xpc_connection_cancel(channel.connection);
-    [_channels removeAllObjects];_legacyInput=nil;
+    NSArray<DHSimChannel *> *channels;
+    @synchronized(_channels) {channels=_channels.allValues;[_channels removeAllObjects];}
+    for(DHSimChannel *channel in channels)if(channel.connection)xpc_connection_cancel(channel.connection);
+    _legacyInput=nil;
 }
 - (void)dealloc { if(!_stopped){[self cleanupScreens];[self cleanupInput];} }
 - (DHSimChannel *)channel:(NSString *)suffix {
@@ -214,6 +223,8 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
         DHSimChannel *existing=_channels[suffix];if(existing.valid)return existing;
         if(existing)[_channels removeObjectForKey:suffix];
     }
+    CFAbsoluteTime began=CFAbsoluteTimeGetCurrent();
+    os_log_debug(DHInputLog(),"Connecting %{public}@",suffix);
     typedef xpc_endpoint_t (*Endpoint)(mach_port_t); typedef void (*Enable)(xpc_connection_t);
     Endpoint endpoint=(Endpoint)dlsym(RTLD_DEFAULT,"xpc_endpoint_create_mach_port_4sim");
     Enable enable=(Enable)dlsym(RTLD_DEFAULT,"xpc_connection_enable_sim2host_4sim");
@@ -232,55 +243,66 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     dispatch_semaphore_t reply=dispatch_semaphore_create(0); __block BOOL alive=NO;
     xpc_object_t probe=DHDictionary(@{@"messageType":@"IndigoKeyboardButtonEvent",@"isBarrier":@YES,@"featureIdentifier":service,@"payload":@{@"usageCode":@0,@"state":@2}});
     xpc_connection_send_message_with_reply(connection,probe,events,^(xpc_object_t result){alive=xpc_get_type(result)!=XPC_TYPE_ERROR;dispatch_semaphore_signal(reply);});
-    if(dispatch_semaphore_wait(reply,dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC))||!alive){xpc_connection_cancel(connection);return nil;}
+    if(dispatch_semaphore_wait(reply,dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC))||!alive){
+        os_log_debug(DHInputLog(),"Connection failed %{public}@ after %.3fs",suffix,CFAbsoluteTimeGetCurrent()-began);
+        xpc_connection_cancel(connection);return nil;
+    }
     [NSThread sleepForTimeInterval:0.2]; // The guest opens its HID device after replying.
     if(_stopped){xpc_connection_cancel(connection);return nil;}
-    @synchronized(_channels) {_channels[suffix]=channel;}
+    @synchronized(_channels) {
+        if(_stopped){xpc_connection_cancel(connection);return nil;}
+        _channels[suffix]=channel;
+    }
+    os_log_debug(DHInputLog(),"Connected %{public}@ after %.3fs",suffix,CFAbsoluteTimeGetCurrent()-began);
     return channel;
 }
-- (void)send:(NSString *)type payload:(NSDictionary *)payload service:(NSString *)service {
+- (BOOL)send:(NSString *)type payload:(NSDictionary *)payload service:(NSString *)service {
     DHSimChannel *channel=[self channel:service];
-    if(!channel){if(_errorHandler)_errorHandler(@"Simulator input disconnected. Try the action again.");return;}
+    if(!channel){if(_errorHandler)_errorHandler(@"Simulator input disconnected. Try the action again.");return NO;}
     xpc_connection_send_message(channel.connection,DHDictionary(@{@"messageType":type,@"isBarrier":@NO,@"featureIdentifier":channel.service,@"payload":payload}));
+    return YES;
 }
 - (void)legacy:(void *)message {
     if(!message)return;
     @try {[_legacyInput sendWithMessage:message freeWhenDone:YES completionQueue:_inputQueue completion:^(NSError *error){if(error&&self.errorHandler)self.errorHandler(error.localizedDescription);}];}
     @catch(NSException *e){free(message);if(_errorHandler)_errorHandler(e.reason);}
 }
-- (void)touchAt:(CGPoint)point phase:(NSInteger)phase secondPoint:(NSValue *)second {
+- (void)touchAt:(CGPoint)point phase:(NSInteger)phase edge:(NSInteger)edge secondPoint:(NSValue *)second {
     dispatch_async(_inputQueue,^{if(self.stopped)return;
         if(self.modernInput){
-            NSMutableDictionary *p=[@{@"pointOne":@{@"x":@(point.x),@"y":@(point.y)},@"eventType":@(phase),@"edge":@0,@"target":@(self.selectedScreen==1?0:self.selectedScreen)} mutableCopy];
+            NSMutableDictionary *p=[@{@"pointOne":@{@"x":@(point.x),@"y":@(point.y)},@"eventType":@(phase),@"edge":@(edge),@"target":@(self.selectedScreen==1?0:self.selectedScreen)} mutableCopy];
             if(second){CGPoint v=second.pointValue;p[@"pointTwo"]=@{@"x":@(v.x),@"y":@(v.y)};}
             [self send:@"IndigoDigitizerEvent" payload:p service:@"digitizer"];
         }else{
             typedef void *(*Builder)(CGPoint *,CGPoint *,uint32_t,NSUInteger,CGSize,uint32_t);
             Builder builder=(Builder)dlsym(RTLD_DEFAULT,"IndigoHIDMessageForMouseNSEvent");
-            if(builder){CGPoint p=point,p2=second.pointValue;[self legacy:builder(&p,second?&p2:NULL,0x32,phase==2?NSEventTypeLeftMouseUp:phase==0?NSEventTypeLeftMouseDown:NSEventTypeLeftMouseDragged,CGSizeMake(1,1),0)];}
+            if(builder){CGPoint p=point,p2=second.pointValue;[self legacy:builder(&p,second?&p2:NULL,0x32,phase==2?NSEventTypeLeftMouseUp:phase==0?NSEventTypeLeftMouseDown:NSEventTypeLeftMouseDragged,CGSizeMake(1,1),(uint32_t)edge)];}
         }
     });
 }
 - (void)key:(uint32_t)usage pressed:(BOOL)pressed {
     dispatch_async(_inputQueue,^{if(self.stopped)return;
-        if(self.modernInput)[self send:@"IndigoKeyboardButtonEvent" payload:@{@"usageCode":@(usage),@"state":@(pressed?1:2)} service:@"keyboard"];
+        if(self.modernInput)[self send:@"IndigoKeyboardButtonEvent" payload:@{@"usageCode":@(usage),@"state":@(pressed?1:2)} service:@"digitizer"];
         else{typedef void *(*Builder)(int,int);Builder fn=(Builder)dlsym(RTLD_DEFAULT,"IndigoHIDMessageForKeyboardArbitrary");if(fn)[self legacy:fn(usage,pressed?1:2)];}
     });
 }
 - (void)button:(uint32_t)usage {
     dispatch_async(_inputQueue,^{if(self.stopped)return;
         for(int state=1;state<=2;state++){
-            if(self.modernInput)[self send:@"IndigoButtonEvent" payload:@{@"usagePage":@12,@"usageCode":@(usage),@"state":@(state)} service:@"button"];
+            if(self.modernInput)[self send:@"IndigoButtonEvent" payload:@{@"usagePage":@12,@"usageCode":@(usage),@"state":@(state)} service:@"digitizer"];
             else{typedef void *(*Builder)(int,uint32_t,uint32_t,int);Builder fn=(Builder)dlsym(RTLD_DEFAULT,"IndigoHIDMessageForHIDArbitrary");if(fn)[self legacy:fn(0x32,12,usage,state)];}
         }
     });
 }
 - (void)vendorSource:(NSString *)source type:(NSString *)type value:(id)value {
+    CFAbsoluteTime began=CFAbsoluteTimeGetCurrent();
     CFDataRef data=IOCFSerialize((__bridge CFDictionaryRef)@{@"provider":@"com.apple.Virtualization.VirtualMachines",@"source":source,@"type":type,@"value":value},1);
     if(!data)return;
-    [self send:@"IndigoVendorDefinedEvent" payload:@{@"usagePage":@0xff61,@"usage":@0x5b,@"version":@0,@"data":CFBridgingRelease(data)} service:@"vendordefined"];
+    BOOL sent=[self send:@"IndigoVendorDefinedEvent" payload:@{@"usagePage":@0xff61,@"usage":@0x5b,@"version":@0,@"data":CFBridgingRelease(data)} service:@"digitizer"];
+    os_log_debug(DHInputLog(),"Vendor event %{public}@ dispatched=%d in %.3fs",source,sent,CFAbsoluteTimeGetCurrent()-began);
 }
-- (void)orient:(NSInteger)orientation { dispatch_async(_inputQueue,^{
+- (void)orient:(NSInteger)orientation {
+    dispatch_async(_inputQueue,^{
     if(self.stopped)return;
     // Legacy runtimes consume GraphicsServices; motion-enabled runtimes consume
     // the vendor report. The former is ignored by motion-enabled runtimes.
@@ -294,10 +316,18 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
         mach_port_deallocate(mach_task_self(),port);
         if(status!=KERN_SUCCESS&&self.errorHandler)self.errorHandler(@"The simulator couldn't rotate. Retry its screen.");
         }
-    if(self.modernInput && [self channel:@"vendordefined"]) {
+    if(self.modernInput) {
         NSString *value=@{@1:@"portrait",@2:@"pud",@3:@"landscape-right",@4:@"landscape-left"}[@(orientation)];
         if(value)[self vendorSource:@"orientation-picker-control" type:@"enum" value:value];
     }
-}); }
-- (void)setFolded:(BOOL)folded { dispatch_async(_inputQueue,^{if(!self.stopped)[self vendorSource:@"hinge-slider-control" type:@"range" value:@(folded?0.0:180.0)];}); }
+    });
+}
+- (void)setFolded:(BOOL)folded {
+    CFAbsoluteTime began=CFAbsoluteTimeGetCurrent();
+    dispatch_async(_inputQueue,^{
+        if(self.stopped)return;
+        os_log_debug(DHInputLog(),"Fold command queue wait %.3fs",CFAbsoluteTimeGetCurrent()-began);
+        [self vendorSource:@"hinge-slider-control" type:@"range" value:@(folded?0.0:180.0)];
+    });
+}
 @end

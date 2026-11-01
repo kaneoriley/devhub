@@ -46,12 +46,14 @@ struct AppleDevice: Hashable {
                   let identifier = entry["identifier"] as? String else { return nil }
             let version = (software["osVersionNumber"] as? [String: Any])?["stringValue"] as? String ?? software["osVersionNumber"] as? String ?? ""
             let model = hardware["marketingName"] as? String ?? family
+            let connectedAt = (connection["lastConnectionDate"] as? Double).map { Date(timeIntervalSinceReferenceDate: $0) }
+                ?? DeviceList.systemDate(connection["lastConnectionDate"] as? String)
             let apple = AppleDevice(identifier: identifier, udid: hardware["udid"] as? String ?? identifier,
                                     platform: hardware["platform"] as? String ?? "iOS", version: version,
                                     connection: connection["state"] as? String ?? connection["tunnelState"] as? String ?? "disconnected",
                                     pairing: connection["pairingState"] as? String ?? "unknown")
             return Device(id: "apple:\(identifier)", name: state["name"] as? String ?? model, detail: model,
-                          model: model, release: version, api: version, kind: family == "iPad" ? .tablet : .phone, appleDevice: apple)
+                          model: model, release: version, api: version, kind: family == "iPad" ? .tablet : .phone, appleDevice: apple, lastUsedAt: connectedAt)
         }.sorted { ($0.name, $0.id) < ($1.name, $1.id) }
     }
 

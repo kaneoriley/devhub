@@ -41,7 +41,8 @@ struct AppleSimulator: Hashable {
                 let simulator = AppleSimulator(udid: entry.udid, state: entry.state, runtime: runtime.name, version: runtime.version,
                                                type: type?.name ?? entry.deviceTypeIdentifier, family: type?.productFamily ?? "iPhone")
                 return Device(id: "simulator:\(entry.udid)", name: entry.name, detail: "Simulator", model: simulator.type,
-                              release: runtime.version, api: runtime.version, kind: simulator.kind, simulator: simulator)
+                              release: runtime.version, api: runtime.version, kind: simulator.kind, simulator: simulator,
+                              lastUsedAt: DeviceList.systemDate(entry.lastUsedAt ?? entry.lastBootedAt))
             }
         }.sorted { ($0.name, $0.api, $0.id) < ($1.name, $1.api, $1.id) }
     }
@@ -146,13 +147,16 @@ enum Simctl {
     var size = CGSize(width: 1080, height: 2400)
     var orientation = QuarterTurn.zero
     var contour = SimulatorContour.rectangle
-    var screenIDs: [Int] = []
     var selectedScreen = 0
     var screenMask: CGImage?
     var failure: String?
     var isConnected = false
     var hasFrame: Bool { receivedFrame }
-    var folded = false
+    private let foldController = FoldController(initial: .opened)
+    var folded: Bool { foldController.selected == .closed }
+    var foldFailure: String? { foldController.failure }
+    @ObservationIgnored private var foldCompletion: (id: UUID, target: FoldState, continuation: CheckedContinuation<Void, Error>)?
+    @ObservationIgnored private var foldTimeout: Task<Void, Never>?
     private var bridge: DHSimulatorBridge?
     private var receivedFrame = false
     private var closed = false
@@ -186,10 +190,12 @@ enum Simctl {
         native.frameHandler = { [weak self] buffer, orientation, screen in
             Task { @MainActor in self?.display(buffer, orientation: orientation, screen: screen) }
         }
-        native.errorHandler = { [weak self] message in Task { @MainActor in self?.failure = message } }
+        native.errorHandler = { [weak self] message in Task { @MainActor in
+            self?.failure = message
+            self?.finishFold(error: MirrorError(message))
+        } }
         try await Task.detached { try native.start() }.value
         guard !closed, !Task.isCancelled else { native.stop(); return }
-        screenIDs = native.screenIDs.map(\.intValue)
         selectedScreen = native.selectedScreen
         isConnected = true
     }
@@ -203,7 +209,11 @@ enum Simctl {
             receivedFrame = true
         }
         selectedScreen = screen
-        if simulator.isFoldable { folded = screen == 1 }
+        if simulator.isFoldable {
+            let state: FoldState = screen == 1 ? .closed : .opened
+            if foldCompletion?.target == state { finishFold() }
+            foldController.synchronize(state, revision: foldController.revision)
+        }
         if size != nextSize || format == nil {
             size = nextSize
             var description: CMVideoFormatDescription?
@@ -243,12 +253,13 @@ enum Simctl {
         bridge?.isPaused = true
     }
     func stop() {
+        finishFold(error: CancellationError())
         closed = true; active = false; connection?.cancel(); connection = nil; textWorker?.cancel()
         bridge?.stop(); bridge = nil; isConnected = false
         layer.sampleBufferRenderer.flush()
     }
-    func touch(_ point: CGPoint, phase: Int, second: CGPoint? = nil) {
-        bridge?.touch(at: point, phase: phase, secondPoint: second.map { NSValue(point: $0) })
+    func touch(_ point: CGPoint, phase: Int, edge: SimulatorTouchEdge = .none, second: CGPoint? = nil) {
+        bridge?.touch(at: point, phase: phase, edge: edge.rawValue, secondPoint: second.map { NSValue(point: $0) })
     }
     func key(_ usage: UInt32, pressed: Bool) { bridge?.key(usage, pressed: pressed) }
     func button(_ usage: UInt32) { bridge?.button(usage) }
@@ -258,8 +269,33 @@ enum Simctl {
         orientation = orientation.next
         bridge?.orient(SimulatorOrientation.device(orientation))
     }
-    func fold(_ folded: Bool) { bridge?.setFolded(folded); self.folded = folded }
-    func selectScreen(_ screen: Int) { bridge?.selectScreen(screen); selectedScreen = screen }
+    func fold(_ folded: Bool) {
+        foldController.select(folded ? .closed : .opened) { [weak self] target in
+            guard let self else { throw CancellationError() }
+            try await self.applyFold(target)
+        }
+    }
+
+    private func applyFold(_ target: FoldState) async throws {
+        guard let bridge, !closed else { throw MirrorError("The simulator is disconnected.") }
+        try await withCheckedThrowingContinuation { continuation in
+            let id = UUID()
+            foldCompletion = (id, target, continuation)
+            bridge.setFolded(target == .closed)
+            foldTimeout = Task { @MainActor in
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                guard foldCompletion?.id == id else { return }
+                finishFold(error: MirrorError("The simulator didn't finish changing to \(target.title)."))
+            }
+        }
+    }
+
+    private func finishFold(error: Error? = nil) {
+        guard let completion = foldCompletion else { return }
+        foldCompletion = nil; foldTimeout?.cancel(); foldTimeout = nil
+        if let error { completion.continuation.resume(throwing: error) }
+        else { completion.continuation.resume() }
+    }
     func screenshot() throws -> Data {
         guard let buffer = layer.sampleBufferRenderer.displayedPixelBuffer() else { throw MirrorError("Wait for the simulator's first frame, then try again.") }
         return try Screenshot.png(from: buffer, rotation: orientation)

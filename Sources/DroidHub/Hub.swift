@@ -12,6 +12,8 @@ struct Device: Identifiable, Hashable {
     var simulator: AppleSimulator?
     var appleDevice: AppleDevice?
     var avd: String?
+    var hasSystemImage = true
+    var lastUsedAt: Date?
     /// Set once the device is online and booted.
     var serial: String?
     var isEmulator: Bool { avd != nil }
@@ -67,6 +69,7 @@ final class Hub {
     }
     var devices: [Device] = []
     var selection: Device.ID?
+    var recentSelections: [String: Double] = UserDefaults.standard.dictionary(forKey: "deviceList.recentSelections") as? [String: Double] ?? [:]
     var booting: Set<Device.ID> = []
     var failure: String?
     var savedScreenshot: SavedScreenshot?
@@ -74,6 +77,12 @@ final class Hub {
     @ObservationIgnored private var props: [String: [String: String]] = [:]
 
     var selected: Device? { devices.first { $0.id == selection } }
+
+    func recordSelection(_ id: Device.ID?) {
+        guard let id else { return }
+        recentSelections[id] = Date.now.timeIntervalSince1970
+        UserDefaults.standard.set(recentSelections, forKey: "deviceList.recentSelections")
+    }
 
     init() {
         // Emulators started elsewhere (Android Studio, react-native run-android) bring their
@@ -141,7 +150,7 @@ final class Hub {
         androidSessions.retain(Set(list.compactMap(\.serial)))
         booting.subtract(list.filter { $0.simulator == nil && $0.isRunning }.map(\.id))
         if devices != list { devices = list }
-        if selected == nil { selection = list.first { $0.serial != nil }?.id ?? list.first?.id }
+        if selection != nil, selected == nil { selection = nil }
     }
 
     func boot(_ device: Device) {
@@ -242,7 +251,8 @@ final class Hub {
             let imageDirectory = sysdir.hasPrefix("/") ? URL(fileURLWithPath: sysdir) : SDK.root.appending(path: sysdir)
             let imageProperties = sysdir.isEmpty ? [:] : ini(imageDirectory.appending(path: "source.properties"))
             let api = AndroidAPI.imageVersion(path: sysdir, properties: imageProperties).map { "API \($0)" } ?? ""
-            return Device(id: "avd:\(avd)", name: config["avd.ini.displayname"] ?? avd.replacingOccurrences(of: "_", with: " "), detail: "Emulator", api: api, kind: DeviceKind.from(config: config), avd: avd)
+            return Device(id: "avd:\(avd)", name: config["avd.ini.displayname"] ?? avd.replacingOccurrences(of: "_", with: " "), detail: "Emulator", api: api, kind: DeviceKind.from(config: config), avd: avd,
+                          hasSystemImage: !sysdir.isEmpty && FileManager.default.fileExists(atPath: imageDirectory.path))
         }
     }
 

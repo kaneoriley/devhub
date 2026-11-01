@@ -38,6 +38,7 @@ struct AppleSimulatorView: View {
                 }
             }
             .onChange(of: mirror?.failure) { _, error in if let error { actionFailure = error } }
+            .onChange(of: mirror?.foldFailure) { _, error in if let error { actionFailure = error } }
             .dropDestination(for: URL.self) { files, _ in receive(files) } isTargeted: { targeted = $0 }
             .overlay {
                 if targeted && simulator.isBooted && !transferring {
@@ -100,8 +101,8 @@ struct AppleSimulatorView: View {
     private func controls(_ mirror: SimulatorMirror) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
-                control("Home", "circle", action: mirror.home).keyboardShortcut("h", modifiers: [.command, .shift])
-                control("App Switcher", "rectangle.on.rectangle", action: mirror.recents)
+                control("Home", "square.grid.3x3.fill", action: mirror.home).keyboardShortcut("h", modifiers: [.command, .shift])
+                control("App Switcher", "iphone.app.switcher", action: mirror.recents)
             }.padding(4).glassEffect(in: .capsule)
             control("Screenshot", "camera.viewfinder") {
                 do { try hub.saveScreenshot(device, png: mirror.screenshot()) } catch { actionFailure = String(describing: error) }
@@ -111,24 +112,14 @@ struct AppleSimulatorView: View {
                     .buttonStyle(.plain).help("Rotate").accessibilityLabel("Rotate").keyboardShortcut(.rightArrow)
                 if simulator.isFoldable {
                     Divider().frame(height: 18).padding(.horizontal, 4)
-                    ForEach([false, true], id: \.self) { folded in
+                    ForEach([true, false], id: \.self) { folded in
                         Button { mirror.fold(folded) } label: {
                             DeviceIcon(folded ? DeviceKind.phone : DeviceKind.tablet)
                                 .foregroundStyle(mirror.folded == folded ? Color.accentColor : Color.primary)
                                 .frame(width: 30, height: 30).contentShape(.rect)
                         }.buttonStyle(.plain).help(folded ? "Closed" : "Opened").accessibilityLabel(folded ? "Closed device" : "Opened device")
+                            .accessibilityAddTraits(mirror.folded == folded ? .isSelected : [])
                     }
-                }
-                if mirror.screenIDs.count > 1 {
-                    Divider().frame(height: 18).padding(.horizontal, 4)
-                    Menu {
-                        ForEach(mirror.screenIDs, id: \.self) { id in
-                            Button { mirror.selectScreen(id) } label: {
-                                if mirror.selectedScreen == id { Label("Display \(id)", systemImage: "checkmark") } else { Text("Display \(id)") }
-                            }
-                        }
-                    } label: { Image(systemName: "display.2").frame(width: 30, height: 30) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Simulator display")
                 }
             }.padding(4).glassEffect(in: .capsule)
         }.padding(.bottom, 16)
@@ -159,9 +150,12 @@ struct SimulatorScreen: NSViewRepresentable {
 
 final class SimulatorScreenView: NSView, NSTextInputClient {
     private let mirror: SimulatorMirror
-    var rotation = QuarterTurn.zero { didSet { if rotation != oldValue { needsLayout = true } } }
+    var rotation = QuarterTurn.zero { didSet { if rotation != oldValue { releaseInput(); needsLayout = true } } }
     private var marked: String?
     private var scrollPoint: CGPoint?
+    private var scrollEdge = SimulatorTouchEdge.none
+    private var mousePoint: CGPoint?
+    private var mouseEdge = SimulatorTouchEdge.none
     private var scrollEnd: Task<Void, Never>?
     private var pinching = false
     private var modifiers: Set<UInt32> = []
@@ -204,21 +198,32 @@ final class SimulatorScreenView: NSView, NSTextInputClient {
     }
     private func touch(_ event: NSEvent, phase: Int) {
         let p = point(event)
-        mirror.touch(p, phase: phase, second: twoFingers ? CGPoint(x: 1-p.x, y: 1-p.y) : nil)
+        mousePoint = phase == 2 ? nil : p
+        mirror.touch(p, phase: phase, edge: mouseEdge, second: twoFingers ? CGPoint(x: 1-p.x, y: 1-p.y) : nil)
     }
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); twoFingers = event.modifierFlags.contains(.option); touch(event, phase: 0) }
-    override func mouseDragged(with event: NSEvent) { touch(event, phase: 1) }
-    override func mouseUp(with event: NSEvent) { touch(event, phase: 2); twoFingers = false }
+    private func edge(_ event: NSEvent) -> SimulatorTouchEdge {
+        SimulatorTouchEdge.detect(at: convert(event.locationInWindow, from: nil), in: bounds.size).sourceEdge(rotation: rotation)
+    }
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        releaseTouches()
+        twoFingers = event.modifierFlags.contains(.option)
+        mouseEdge = twoFingers ? .none : edge(event)
+        touch(event, phase: 0)
+    }
+    override func mouseDragged(with event: NSEvent) { if mousePoint != nil { touch(event, phase: 1) } }
+    override func mouseUp(with event: NSEvent) { if mousePoint != nil { touch(event, phase: 2) }; twoFingers = false; mouseEdge = .none }
     override func rightMouseDown(with event: NSEvent) { mirror.home() }
     override func scrollWheel(with event: NSEvent) {
         scrollEnd?.cancel()
-        if scrollPoint == nil { scrollPoint = point(event); mirror.touch(scrollPoint!, phase: 0) }
+        guard mousePoint == nil, bounds.width > 0, bounds.height > 0 else { return }
+        if scrollPoint == nil { scrollEdge = edge(event); scrollPoint = point(event); mirror.touch(scrollPoint!, phase: 0, edge: scrollEdge) }
         let delta = rotation.sourceVector(CGPoint(x: event.scrollingDeltaX / bounds.width, y: event.scrollingDeltaY / bounds.height))
         let next = CGPoint(x: min(max(scrollPoint!.x + delta.x, 0.01), 0.99), y: min(max(scrollPoint!.y + delta.y, 0.01), 0.99))
-        scrollPoint = next; mirror.touch(next, phase: 1)
+        scrollPoint = next; mirror.touch(next, phase: 1, edge: scrollEdge)
         scrollEnd = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
-            if let point = scrollPoint { mirror.touch(point, phase: 2) }; scrollPoint = nil
+            if let point = scrollPoint { mirror.touch(point, phase: 2, edge: scrollEdge) }; scrollPoint = nil; scrollEdge = .none
         }
     }
     override func keyDown(with event: NSEvent) { interpretKeyEvents([event]) }
@@ -229,9 +234,14 @@ final class SimulatorScreenView: NSView, NSTextInputClient {
             if down != modifiers.contains(usage) { mirror.key(usage, pressed: down); if down { modifiers.insert(usage) } else { modifiers.remove(usage) } }
         }
     }
-    func releaseInput() {
+    private func releaseTouches() {
         scrollEnd?.cancel()
-        if let point = scrollPoint { mirror.touch(point, phase: 2); scrollPoint = nil }
+        if let point = scrollPoint { mirror.touch(point, phase: 2, edge: scrollEdge); scrollPoint = nil }
+        if let point = mousePoint { mirror.touch(point, phase: 2, edge: mouseEdge, second: twoFingers ? CGPoint(x: 1-point.x, y: 1-point.y) : nil); mousePoint = nil }
+        scrollEdge = .none; mouseEdge = .none; twoFingers = false
+    }
+    func releaseInput() {
+        releaseTouches()
         for usage in modifiers { mirror.key(usage, pressed: false) }; modifiers = []
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

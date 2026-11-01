@@ -65,6 +65,32 @@ import Testing
     for value in 1...4 { #expect(SimulatorOrientation.device(SimulatorOrientation.interface(value)) == value) }
 }
 
+@Test func simulatorEdgeGesturesRecognizeOnlyTheStartingScreenEdge() {
+    let size = CGSize(width: 400, height: 800)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: 200, y: 794), in: size) == .bottom)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: 200, y: 5), in: size) == .top)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: 5, y: 400), in: size) == .left)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: 395, y: 400), in: size) == .right)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: 200, y: 400), in: size) == .none)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: 200, y: 780), in: size) == .none)
+    #expect(SimulatorTouchEdge.detect(at: CGPoint(x: -1, y: 400), in: size) == .none)
+    #expect(SimulatorTouchEdge.detect(at: .zero, in: .zero) == .none)
+}
+
+@Test func simulatorEdgeGesturesRotateIntoTheSameSourceSpaceAsTouches() {
+    let edges: [SimulatorTouchEdge] = [.top, .right, .bottom, .left]
+    let points = [CGPoint(x: 0.5, y: 0), CGPoint(x: 1, y: 0.5), CGPoint(x: 0.5, y: 1), CGPoint(x: 0, y: 0.5)]
+    for value in 0..<4 {
+        let rotation = QuarterTurn(value)
+        for (edge, point) in zip(edges, points) {
+            let source = rotation.sourcePoint(point)
+            #expect(edge.sourceEdge(rotation: rotation) == SimulatorTouchEdge.detect(at: CGPoint(x: source.x * 400, y: source.y * 800), in: CGSize(width: 400, height: 800)))
+        }
+        #expect(SimulatorTouchEdge.none.sourceEdge(rotation: rotation) == .none)
+    }
+    #expect(SimulatorTouchEdge.bottom.sourceEdge(rotation: QuarterTurn(1)) == .right)
+}
+
 @Test func simulatorCasingFollowsAsymmetricMaskWithoutTracingCameraCutouts() {
     let left = [3, 1, 0, 0, 0, 0, 0, 1]
     let right = [6, 7, 7, 7, 7, 7, 7, 6]

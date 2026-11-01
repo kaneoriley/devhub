@@ -8,6 +8,7 @@ struct Device: Identifiable, Hashable {
     var model = ""
     var release = ""
     var api = ""
+    var kind = DeviceKind.phone
     var avd: String?
     /// Set once the device is online and booted.
     var serial: String?
@@ -51,6 +52,14 @@ func adb(_ args: String...) async -> String {
 
 @Observable @MainActor
 final class Hub {
+    @ObservationIgnored private var displayControllers: [String: DisplayController] = [:]
+
+    func displayController(serial: String, isEmulator: Bool) -> DisplayController {
+        if let controller = displayControllers[serial] { return controller }
+        let controller = DisplayController(serial: serial, isEmulator: isEmulator)
+        displayControllers[serial] = controller
+        return controller
+    }
     var devices: [Device] = []
     var selection: Device.ID?
     var booting: Set<Device.ID> = []
@@ -112,7 +121,8 @@ final class Hub {
             d.serial = serial
             d.model = model
             d.release = p["ro.build.version.release"] ?? ""
-            d.api = p["ro.build.version.sdk"].map { "API \($0)" } ?? d.api
+            let avdVersion = d.isEmulator && !d.api.isEmpty ? String(d.api.dropFirst(4)) : nil
+            d.api = AndroidAPI.label(properties: p, avdVersion: avdVersion) ?? d.api
             list.append(d)
         }
         list.sort { ($0.isEmulator ? 1 : 0, $0.name) < ($1.isEmulator ? 1 : 0, $1.name) }
@@ -126,7 +136,8 @@ final class Hub {
         guard let avd = device.avd, !booting.contains(device.id) else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: SDK.emulator)
-        p.arguments = ["-avd", avd, "-no-window", "-no-boot-anim"]
+        let config = Self.ini(SDK.avdHome.appending(path: "\(avd).avd/config.ini"))
+        p.arguments = Self.bootArguments(avd: avd, config: config)
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         p.terminationHandler = { _ in Task { @MainActor in self.booting.remove(device.id) } }
@@ -134,33 +145,23 @@ final class Hub {
         booting.insert(device.id)
     }
 
+    nonisolated static func bootArguments(avd: String, config: [String: String]) -> [String] {
+        // The headless emulator's changeResizableDisplay agent is a stub returning false.
+        // Keep Qt loaded but its window hidden for Resizable AVDs, as Studio does when embedded.
+        let window = DisplayPreset.parse(config["hw.resizable.configs"] ?? "").isEmpty ? "-no-window" : "-qt-hide-window"
+        return ["-avd", avd, window, "-no-boot-anim"]
+    }
+
     func shutdown(_ device: Device) {
         guard let serial = device.serial else { return }
         Task { await adb("-s", serial, "emu", "kill") }
     }
 
-    /// scrcpy's own rotate is undone right away when auto-rotate is on, which is the
-    /// default. Emulators turn through their console instead, and phones get the
-    /// other orientation locked.
-    func rotate(_ device: Device) {
-        guard let serial = device.serial else { return }
-        Task {
-            if device.isEmulator {
-                await adb("-s", serial, "emu", "rotate")
-            } else {
-                await adb("-s", serial, "shell", "r=$(dumpsys input | grep -m1 -oE 'orientation=[0-9]' | cut -d= -f2); settings put system accelerometer_rotation 0; settings put system user_rotation $(( (${r:-0} & 1) ^ 1 ))")
-            }
-        }
-    }
-
     /// Saves to the Desktop and copies to the clipboard, like Simulator.
-    func screenshot(_ device: Device) async {
-        guard let serial = device.serial else { return }
-        let png = await exec(SDK.adb, ["-s", serial, "exec-out", "screencap", "-p"])
-        guard !png.isEmpty else { return }
+    func saveScreenshot(_ device: Device, png: Data) throws {
         let date = Date.now.formatted(.verbatim("\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) at \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)).\(minute: .twoDigits).\(second: .twoDigits)", timeZone: .current, calendar: .current))
         let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-        try? png.write(to: desktop.appending(path: "\(device.name.replacingOccurrences(of: "/", with: "-")) \(date).png"))
+        try png.write(to: desktop.appending(path: "\(device.name.replacingOccurrences(of: "/", with: "-")) \(date).png"), options: .atomic)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(png, forType: .png)
     }
@@ -180,8 +181,10 @@ final class Hub {
             let avd = url.deletingPathExtension().lastPathComponent
             let config = ini(SDK.avdHome.appending(path: "\(avd).avd/config.ini"))
             let sysdir = config["image.sysdir.1"] ?? ""
-            let api = sysdir.range(of: #"android-\d+"#, options: .regularExpression).map { "API " + sysdir[$0].dropFirst(8) } ?? ""
-            return Device(id: "avd:\(avd)", name: config["avd.ini.displayname"] ?? avd.replacingOccurrences(of: "_", with: " "), detail: "Emulator", api: api, avd: avd)
+            let imageDirectory = sysdir.hasPrefix("/") ? URL(fileURLWithPath: sysdir) : SDK.root.appending(path: sysdir)
+            let imageProperties = sysdir.isEmpty ? [:] : ini(imageDirectory.appending(path: "source.properties"))
+            let api = AndroidAPI.imageVersion(path: sysdir, properties: imageProperties).map { "API \($0)" } ?? ""
+            return Device(id: "avd:\(avd)", name: config["avd.ini.displayname"] ?? avd.replacingOccurrences(of: "_", with: " "), detail: "Emulator", api: api, kind: DeviceKind.from(config: config), avd: avd)
         }
     }
 

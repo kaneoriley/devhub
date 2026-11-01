@@ -17,6 +17,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/DroidHub "$APP/Contents/MacOS/"
 cp "$JAR" "$APP/Contents/Resources/scrcpy-server"
+cp -R .build/release/DroidHub_DroidHub.bundle "$APP/Contents/Resources/"
 
 # Icon Composer icon with layers rendered by icon/icon.py. actool writes Assets.car,
 # which macOS 26 needs to skip the gray squircle it puts around legacy icons, plus

@@ -71,18 +71,16 @@ struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "smartphone")
-                .font(.title2)
-                .foregroundStyle(device.serial != nil ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                .frame(width: 26)
+            DeviceBadge(kind: device.kind, selected: hub.selection == device.id, running: device.serial != nil)
             VStack(alignment: .leading, spacing: 1) {
-                Text(device.name).fontWeight(.medium)
+                Text(device.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 Text(hub.booting.contains(device.id) ? "Booting…" : device.detail)
-                    .font(.caption)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(device.api).font(.caption).foregroundStyle(.secondary)
+            Text(device.api).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).fixedSize()
         }
         .padding(.vertical, 2)
         .contextMenu {
@@ -122,11 +120,124 @@ struct DeviceView: View {
     @Binding var panel: Panel?
     @State private var mirror: Mirror?
     @State private var size = CGSize(width: 1080, height: 2400)
+    @State private var displayGeometry: DisplayGeometry?
     @State private var failure: String?
     @State private var attempt = 0
+    @State private var dropTargeted = false
+    @State private var transferring = false
+    @State private var transferStatus: String?
+    @State private var actionFailure: String?
+    @State private var presets: [DisplayPreset] = []
+    @State private var displayController: DisplayController?
+    @State private var foldConfiguration: FoldConfiguration?
+    @State private var foldState: FoldState?
+    @State private var folding = false
+
+    private var selectedPreset: Int? { displayController?.selectedPreset }
+    private var resizing: Bool { displayController?.isChangingPreset == true }
+    private var displayBusy: Bool { displayController?.isBusy == true }
+    private var videoRotation: QuarterTurn { displayController?.orientation ?? .zero }
+    private var displayCorners: DisplayCorners {
+        (displayGeometry?.videoCorners(size: size, naturalOrientation: device.isEmulator) ?? .square).rotated(videoRotation)
+    }
+
+    private var canFold: Bool {
+        guard device.kind != .resizable, let foldConfiguration else { return false }
+        return foldConfiguration.resizableMode == nil
+    }
 
     var body: some View {
         content
+            .contentShape(.rect)
+            .dropDestination(for: URL.self) { files, _ in
+                receive(files)
+            } isTargeted: { dropTargeted = $0 }
+            .overlay {
+                if dropTargeted, device.serial != nil, !transferring {
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(.tint.opacity(0.12))
+                        .strokeBorder(.tint, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                        .overlay {
+                            VStack(spacing: 8) {
+                                Image(systemName: "square.and.arrow.down").font(.largeTitle)
+                                Text("Drop to install or copy").font(.headline)
+                                Text("APKs install. Other files go to Downloads.")
+                            }
+                            .padding(24)
+                            .glassEffect(in: .rect(cornerRadius: 16))
+                        }
+                        .padding(16)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .top) {
+                if let transferStatus {
+                    HStack(spacing: 10) {
+                        if transferring { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "checkmark.circle") }
+                        Text(transferStatus).lineLimit(2)
+                        if !transferring {
+                            Button("Dismiss", systemImage: "xmark") { self.transferStatus = nil }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(12)
+                    .glassEffect(in: .rect(cornerRadius: 12))
+                    .padding(16)
+                    .accessibilityElement(children: .contain)
+                }
+            }
+            .alert("Device Action Failed", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
+                Button("OK", role: .cancel) { actionFailure = nil }
+            } message: {
+                Text(actionFailure ?? "")
+            }
+            .task(id: device.serial) {
+                presets = []
+                displayController = device.serial.map { hub.displayController(serial: $0, isEmulator: device.isEmulator) }
+                await displayController?.synchronizeOrientation()
+                foldConfiguration = DeviceActions().foldConfiguration(for: device)
+                foldState = nil
+                let available = await DeviceActions().displayPresets(for: device)
+                guard !Task.isCancelled else { return }
+                var state: DisplayState?
+                if !available.isEmpty, !displayBusy, let serial = device.serial,
+                   let current = try? await DeviceActions().synchronizeDisplay(presets: available, serial: serial) {
+                    state = current
+                }
+                guard !Task.isCancelled else { return }
+                presets = available
+                if let state, !displayBusy { displayController?.selectedPreset = presetID(for: state) }
+                await mirror?.refreshDensity()
+                guard let serial = device.serial else { return }
+                while !Task.isCancelled {
+                    if foldConfiguration != nil {
+                        let posture = try? await DeviceActions().foldState(serial: serial)
+                        guard !Task.isCancelled else { return }
+                        if !folding, !displayBusy { foldState = posture }
+                    }
+                    if !presets.isEmpty, !displayBusy, let current = try? await DeviceActions().displayState(serial: serial), !Task.isCancelled, !displayBusy {
+                        displayController?.selectedPreset = presetID(for: current)
+                    }
+                    await displayController?.synchronizeOrientation()
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                }
+            }
+            .onChange(of: size) { _, _ in
+                guard !presets.isEmpty, !displayBusy, let serial = device.serial else { return }
+                Task { @MainActor in
+                    if let state = try? await DeviceActions().displayState(serial: serial), !displayBusy {
+                        displayController?.selectedPreset = presetID(for: state)
+                    }
+                }
+            }
+            .onChange(of: displayController?.failure) { _, failure in
+                if let failure { actionFailure = failure }
+            }
+            .onChange(of: displayController?.revision) { _, _ in
+                Task { await mirror?.refreshDensity() }
+            }
             .navigationTitle(device.name)
             .navigationSubtitle(device.release.isEmpty ? device.detail : "Android \(device.release)")
             .toolbar {
@@ -158,9 +269,9 @@ struct DeviceView: View {
 
     @ViewBuilder private var content: some View {
         if let serial = device.serial {
-            Phone(size: size) {
+            Phone(size: videoRotation.size(size), corners: displayCorners) {
                 if let mirror {
-                    Screen(mirror: mirror)
+                    Screen(mirror: mirror, rotation: videoRotation, acceptsFiles: !transferring, receiveFiles: receive, dropTargeted: { dropTargeted = $0 })
                 } else {
                     Color.black.overlay {
                         if let failure {
@@ -181,6 +292,14 @@ struct DeviceView: View {
                 if let mirror { controls(mirror) }
             }
             .task(id: "\(serial)#\(attempt)") { await connect(serial) }
+            .task(id: size) {
+                while !Task.isCancelled {
+                    let geometry = try? await DeviceActions().displayGeometry(serial: serial)
+                    guard !Task.isCancelled else { return }
+                    displayGeometry = geometry
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                }
+            }
         } else if hub.booting.contains(device.id) {
             ProgressView("Booting \(device.name)…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -207,21 +326,114 @@ struct DeviceView: View {
             }
             .padding(4)
             .glassEffect(in: .capsule)
-            bar("Screenshot", "camera") { Task { await hub.screenshot(device) } }
-                .keyboardShortcut("s")
-                .padding(4)
-                .glassEffect(in: .circle)
-            bar("Rotate", "rotate.right") { hub.rotate(device) }
-                .keyboardShortcut(.rightArrow)
-                .padding(4)
-                .glassEffect(in: .circle)
+            bar("Screenshot", "camera.viewfinder") {
+                Task { @MainActor in
+                    do { try hub.saveScreenshot(device, png: mirror.screenshot(rotation: videoRotation)) }
+                    catch { actionFailure = "Couldn't save screenshot.\n\(error)" }
+                }
+            }
+            .keyboardShortcut("s")
+            .padding(4)
+            .glassEffect(in: .circle)
+            HStack(spacing: 2) {
+                bar("Rotate", "device-rotate", asset: true) { displayController?.rotate() }
+                    .keyboardShortcut(.rightArrow)
+                    .disabled(resizing || folding)
+                if !presets.isEmpty {
+                    controlDivider
+                    ForEach(FormFactor.controlOrder, id: \.self) { factor in
+                        let preset = presets.first { $0.factor == factor }
+                        Button { if let preset { resize(preset) } } label: {
+                            DeviceIcon(factor)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(selectedPreset == factor.rawValue ? Color.accentColor : Color.primary)
+                                .frame(width: 30, height: 30)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(preset == nil || folding)
+                        .help(preset == nil ? "\(factor.title) unavailable" : factor.title)
+                        .accessibilityLabel(factor.title)
+                        .accessibilityAddTraits(selectedPreset == factor.rawValue ? .isSelected : [])
+                    }
+                }
+                if canFold, let foldConfiguration {
+                    controlDivider
+                    ForEach(FoldState.allCases, id: \.self) { state in
+                        Button { setFoldState(state) } label: {
+                            DeviceIcon(state == .opened ? DeviceKind.tablet : DeviceKind.phone)
+                                .frame(width: 30, height: 30)
+                                .contentShape(.rect)
+                        }
+                            .foregroundStyle(foldState == state ? Color.accentColor : Color.primary)
+                            .buttonStyle(.plain)
+                            .help(state.title)
+                            .disabled(!foldConfiguration.states.contains(state) || folding || displayBusy)
+                            .accessibilityLabel("\(state.title) device")
+                            .accessibilityAddTraits(foldState == state ? .isSelected : [])
+                    }
+                }
+            }
+            .padding(4)
+            .glassEffect(in: .capsule)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Display controls")
         }
         .padding(.bottom, 16)
     }
 
-    private func bar(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+    private var controlDivider: some View {
+        Divider().frame(height: 18).padding(.horizontal, 4)
+    }
+
+    private func presetID(for state: DisplayState) -> Int? {
+        if let preset = presets.first(where: { state.matches($0) }) { return preset.id }
+        if foldConfiguration?.matchesClosedDisplay(state.size) == true {
+            return foldConfiguration?.resizableMode
+        }
+        return nil
+    }
+
+    private func setFoldState(_ state: FoldState) {
+        guard let serial = device.serial, !folding, !displayBusy, foldState != state else { return }
+        folding = true
+        Task { @MainActor in
+            defer { folding = false }
+            do {
+                try await DeviceActions().setFoldState(state, serial: serial)
+                foldState = state
+            } catch { actionFailure = String(describing: error) }
+        }
+    }
+
+    private func receive(_ files: [URL]) -> Bool {
+        guard let serial = device.serial, !transferring, !files.isEmpty, files.allSatisfy(\.isFileURL) else { return false }
+        transferring = true
+        transferStatus = "Preparing files…"
+        Task { @MainActor in
+            defer { transferring = false }
+            do {
+                transferStatus = try await DeviceActions().transfer(files, serial: serial) { transferStatus = $0 }
+            } catch {
+                transferStatus = nil
+                actionFailure = String(describing: error)
+            }
+        }
+        return true
+    }
+
+    private func resize(_ preset: DisplayPreset) {
+        guard !folding else { return }
+        displayController?.select(preset)
+    }
+
+    private func bar(_ title: String, _ icon: String, asset: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 14, weight: .medium)).frame(width: 30, height: 30).contentShape(.rect)
+            Group {
+                if asset { DeviceHubGlyph(icon, size: 22) }
+                else { Image(systemName: icon).font(.system(size: 14, weight: .medium)) }
+            }
+            .frame(width: 30, height: 30).contentShape(.rect)
         }
         .buttonStyle(.plain)
         .help(title)
@@ -232,7 +444,11 @@ struct DeviceView: View {
         mirror = nil
         failure = nil
         let m = Mirror(serial: serial)
-        m.onSize = { size = $0 }
+        m.onSize = { [weak m] new in
+            size = new
+            // Resizable modes can change density as well as resolution.
+            if !presets.isEmpty { Task { await m?.refreshDensity() } }
+        }
         m.onClose = { [weak m] in
             m?.stop()  // frees the server and the adb forward now, not at the next Retry
             mirror = nil
@@ -254,34 +470,48 @@ struct DeviceView: View {
 /// Device frame drawn around the screen, sized from the video's pixel dimensions.
 struct Phone<Content: View>: View {
     let size: CGSize
+    let corners: DisplayCorners
     @ViewBuilder let content: Content
 
     var body: some View {
         let short = min(size.width, size.height)
-        let bezel = short * 0.04
+        let bezel = short * 0.02
         let outer = CGSize(width: size.width + bezel * 2, height: size.height + bezel * 2)
         GeometryReader { geo in
             let k = geo.size.width / outer.width
-            let radius = short * 0.1 * k
-            let shell = RoundedRectangle(cornerRadius: radius + bezel * k, style: .continuous)
+            let shell = corners.shape(scale: k, border: bezel * k, style: .continuous)
+            let screen = corners.shape(scale: k, style: .continuous)
             ZStack {
-                shell.fill(.black)
+                shell.fill(Color(white: 0.035))
+                    .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
                 shell.strokeBorder(
-                    LinearGradient(colors: [Color(white: 0.6), Color(white: 0.28), Color(white: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: max(2, bezel * k * 0.3)
+                    LinearGradient(stops: [.init(color: Color(white: 0.48), location: 0),
+                                           .init(color: Color(white: 0.22), location: 0.3),
+                                           .init(color: Color(white: 0.13), location: 0.55),
+                                           .init(color: Color(white: 0.38), location: 1)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                    lineWidth: 1.5
                 )
+                shell.inset(by: 1.5)
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
+                shell.inset(by: 3)
+                    .strokeBorder(.black.opacity(0.8), lineWidth: 1)
                 content
                     .frame(width: size.width * k, height: size.height * k)
-                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    .clipShape(screen, style: FillStyle(antialiased: true))
+                    .overlay {
+                        screen.strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+                            .allowsHitTesting(false)
+                    }
             }
             .overlay(alignment: .topTrailing) {
                 if size.height > size.width {  // power and volume keys, right edge, portrait only
-                    let h = geo.size.height, w = max(2, bezel * k * 0.3)
+                    let h = geo.size.height, w = max(1.5, bezel * k * 0.16)
                     VStack(spacing: h * 0.04) {
                         Capsule().frame(width: w, height: h * 0.07)
                         Capsule().frame(width: w, height: h * 0.13)
                     }
-                    .foregroundStyle(Color(white: 0.4))
+                    .foregroundStyle(Color(white: 0.25))
                     .offset(x: w * 0.8, y: h * 0.2)
                 }
             }
@@ -292,13 +522,34 @@ struct Phone<Content: View>: View {
 
 struct Screen: NSViewRepresentable {
     let mirror: Mirror
-    func makeNSView(context: Context) -> ScreenView { ScreenView(mirror: mirror) }
-    func updateNSView(_ view: ScreenView, context: Context) {}
+    let rotation: QuarterTurn
+    let acceptsFiles: Bool
+    let receiveFiles: ([URL]) -> Bool
+    let dropTargeted: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ScreenView {
+        let view = ScreenView(mirror: mirror)
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: ScreenView, context: Context) {
+        view.rotation = rotation
+        view.acceptsFiles = acceptsFiles
+        view.receiveFiles = receiveFiles
+        view.dropTargeted = dropTargeted
+    }
 }
 
 /// Hosts the video layer and turns mouse and keyboard input into Android events.
 final class ScreenView: NSView {
     private let mirror: Mirror
+    var rotation = QuarterTurn.zero {
+        didSet { if rotation != oldValue { needsLayout = true } }
+    }
+    var acceptsFiles = true
+    var receiveFiles: (([URL]) -> Bool)?
+    var dropTargeted: ((Bool) -> Void)?
     private var marked: String?
     private static let ctrl: UInt32 = 0x3000  // META_CTRL_ON | META_CTRL_LEFT_ON
     private static let commands: [Selector: (UInt32, UInt32)] = [
@@ -325,6 +576,7 @@ final class ScreenView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Device screen")
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -332,6 +584,24 @@ final class ScreenView: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // Handle Finder drops on the AppKit video surface itself as well as SwiftUI's
+    // surrounding detail view. This also ensures Finder proposes a copy, never a move.
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        let canDrop = acceptsFiles && sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        dropTargeted?(canDrop)
+        return canDrop ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { dropTargeted?(false) }
+    override func draggingEnded(_ sender: any NSDraggingInfo) { dropTargeted?(false) }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        dropTargeted?(false)
+        guard acceptsFiles, let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
+        return receiveFiles?(urls) ?? false
+    }
 
     override func viewDidMoveToWindow() {
         DispatchQueue.main.async { self.window?.makeFirstResponder(self) }
@@ -341,13 +611,15 @@ final class ScreenView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        mirror.layer.frame = bounds
+        mirror.layer.bounds = CGRect(origin: .zero, size: rotation.size(bounds.size))
+        mirror.layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        mirror.layer.setAffineTransform(CGAffineTransform(rotationAngle: rotation.radians))
         CATransaction.commit()
     }
 
     private func point(_ event: NSEvent) -> CGPoint {
         let p = convert(event.locationInWindow, from: nil)
-        return CGPoint(x: p.x / bounds.width, y: p.y / bounds.height)
+        return rotation.sourcePoint(CGPoint(x: p.x / bounds.width, y: p.y / bounds.height))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -362,8 +634,10 @@ final class ScreenView: NSView {
     override func scrollWheel(with event: NSEvent) {
         // Trackpads report points and wheels report notches. Converting points at the
         // current zoom keeps the content under the fingers.
-        let k = event.hasPreciseScrollingDeltas ? 1 / mirror.pointsPerNotch(viewWidth: bounds.width) : 1
-        mirror.scroll(at: point(event), dx: Float(-event.scrollingDeltaX * k), dy: Float(event.scrollingDeltaY * k))
+        let k = event.hasPreciseScrollingDeltas ? 1 / mirror.pointsPerNotch(viewWidth: rotation.size(bounds.size).width) : 1
+        // AppKit's vertical scroll sign is opposite to its screen coordinates.
+        let delta = rotation.sourceVector(CGPoint(x: -event.scrollingDeltaX * k, y: -event.scrollingDeltaY * k))
+        mirror.scroll(at: point(event), dx: Float(delta.x), dy: Float(-delta.y))
     }
 
     override func keyDown(with event: NSEvent) {

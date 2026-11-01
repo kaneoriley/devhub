@@ -42,12 +42,13 @@ final class Mirror {
         await adb("-s", serial, "push", jar.path, remote)
         port = await adb("-s", serial, "forward", "tcp:0", "localabstract:scrcpy_\(scid)").trimmingCharacters(in: .whitespacesAndNewlines)
         guard let localPort = UInt16(port) else { throw MirrorError("adb forward failed") }
-        density = Self.density(from: await adb("-s", serial, "shell", "wm", "density")) ?? density
+        await refreshDensity()
 
         let server = Process()
         server.executableURL = URL(fileURLWithPath: SDK.adb)
         server.arguments = ["-s", serial, "shell", "CLASSPATH=\(remote)", "app_process", "/", "com.genymobile.scrcpy.Server", version,
-                            "scid=\(scid)", "tunnel_forward=true", "audio=false", "video_codec=h264", "max_fps=60", "stay_awake=true"]
+                            "scid=\(scid)", "tunnel_forward=true", "audio=false", "video_codec=h264", "max_fps=60", "stay_awake=true",
+                            "capture_orientation=\(serial.hasPrefix("emulator-") ? "@0" : "0")"]
         let log = Pipe()
         server.standardOutput = log
         server.standardError = log
@@ -87,6 +88,13 @@ final class Mirror {
         server?.terminate()
         let args = ["-s", serial, "forward", "--remove", "tcp:\(port)"]
         Task.detached { _ = await exec(SDK.adb, args) }
+    }
+
+    @MainActor func screenshot(rotation: QuarterTurn = .zero) throws -> Data {
+        guard let buffer = layer.sampleBufferRenderer.displayedPixelBuffer() else {
+            throw MirrorError("No video frame is available yet. Wait for the device screen and try again.")
+        }
+        return try Screenshot.png(from: buffer, rotation: rotation)
     }
 
     // MARK: Input (main thread). Points are normalized to 0...1.
@@ -153,15 +161,20 @@ final class Mirror {
         throw MirrorError("scrcpy server didn't start")
     }
 
+    @MainActor func refreshDensity() async {
+        density = Self.density(from: await adb("-s", serial, "shell", "wm", "density")) ?? density
+    }
+
     private func readVideo(_ s: Socket) {
         defer { DispatchQueue.main.async { if !self.closed { self.onClose?() } } }
         // 64-byte device name, then the codec id.
         guard s.read(64) != nil, let codec = s.read(4), codec.int(0) as UInt32 == 0x6832_3634 else { return }
         var format: CMVideoFormatDescription?
+        var pendingSize: CGSize?
         while let header = s.read(12) {
             if header[0] & 0x80 != 0 {  // session packet: new capture size (e.g. after rotating)
-                let size = CGSize(width: Int(header.int(4) as UInt32), height: Int(header.int(8) as UInt32))
-                DispatchQueue.main.async { self.size = size; self.onSize?(size) }
+                pendingSize = CGSize(width: Int(header.int(4) as UInt32), height: Int(header.int(8) as UInt32))
+                format = nil
                 continue
             }
             let flags: UInt64 = header.int(0)
@@ -171,9 +184,20 @@ final class Mirror {
                 continue
             }
             guard let format, let sample = H264.sample(packet, format: format) else { continue }
-            let renderer = layer.sampleBufferRenderer
-            if renderer.status == .failed { renderer.flush() }
-            renderer.enqueue(sample)
+            let newSize = pendingSize
+            pendingSize = nil
+            // Keep frame and geometry updates in order, and reset the decoder at a new
+            // capture session instead of reusing reference frames from the previous size.
+            DispatchQueue.main.async {
+                guard !self.closed else { return }
+                let renderer = self.layer.sampleBufferRenderer
+                if let newSize {
+                    renderer.flush()
+                    self.size = newSize
+                    self.onSize?(newSize)
+                } else if renderer.status == .failed { renderer.flush() }
+                renderer.enqueue(sample)
+            }
         }
     }
 
@@ -336,7 +360,7 @@ final class Socket {
     private init(fd: Int32) { self.fd = fd }
     deinit { close(fd) }
 
-    static func connect(port: UInt16) throws -> Socket {
+    static func connect(port: UInt16, timeout: Int? = nil) throws -> Socket {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw MirrorError("socket() failed") }
         var addr = sockaddr_in()
@@ -353,6 +377,11 @@ final class Socket {
         var one: Int32 = 1
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, socklen_t(MemoryLayout<Int32>.size))
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        if let timeout {
+            var value = timeval(tv_sec: timeout, tv_usec: 0)
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &value, socklen_t(MemoryLayout<timeval>.size))
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &value, socklen_t(MemoryLayout<timeval>.size))
+        }
         return Socket(fd: fd)
     }
 

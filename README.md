@@ -35,8 +35,12 @@ The Android emulator draws its own frameless window with a toolbar floating besi
 And the rest:
 
 - Back, Home and Recents in a floating bar at the bottom, volume and power in the toolbar.
-- ⌘S takes a screenshot, saves it to the Desktop and copies it to the clipboard, like Simulator does.
+- ⌘S saves the device frame currently shown in DroidHub to the Desktop and copies it to the clipboard, like Simulator does. Screenshots use the mirrored display at its original resolution, including when a Resizable or foldable emulator changes displays.
 - ⌘→ rotates the device.
+- Screen corners follow Android's reported per-display radii, including after rotation, resizing, or folding. Displays with no reported rounding keep their full rectangular image.
+- Drop an APK onto the device to install it, or drop a base APK and its splits together to install one app. Other files copy to the device's Downloads folder (`/sdcard/Download/`). Drop APKs and other files separately; folders aren't supported. Progress and errors appear in the window.
+- Rotate and Phone / Foldable / Tablet share a display-control capsule. Available form factors come from the AVD's configuration and emulator; unsupported segments are disabled. Dedicated foldable emulators also get Opened / Closed controls. The selection follows the device's actual size, density, and committed folding state. DroidHub boots Resizable AVDs with the emulator window hidden rather than fully headless, because resizing requires the window agent. Shut down and boot existing headless Resizable emulators once to enable switching.
+- Form-factor changes finish the emulator's transition before applying the latest queued selection, and use each preset's natural orientation. Emulator rotation turns the displayed device even when Android auto-rotate is disabled or an app locks its orientation; touch input and screenshots follow the displayed rotation.
 - The inspector switches dark mode, font size, show taps and layout bounds, and lists model, Android version, resolution and density.
 - Physical devices connected through adb show up next to the emulators.
 - The + in the sidebar creates emulators from Android Studio's device catalog and any installed system image, with no SDK cmdline-tools needed. Emulators that are off can be deleted from their context menu.

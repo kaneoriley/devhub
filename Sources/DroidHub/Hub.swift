@@ -69,6 +69,8 @@ final class Hub {
     var selection: Device.ID?
     var booting: Set<Device.ID> = []
     var failure: String?
+    var savedScreenshot: SavedScreenshot?
+    @ObservationIgnored private var screenshotDismissal: Task<Void, Never>?
     @ObservationIgnored private var props: [String: [String: String]] = [:]
 
     var selected: Device? { devices.first { $0.id == selection } }
@@ -191,9 +193,35 @@ final class Hub {
     func saveScreenshot(_ device: Device, png: Data) throws {
         let date = Date.now.formatted(.verbatim("\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) at \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)).\(minute: .twoDigits).\(second: .twoDigits)", timeZone: .current, calendar: .current))
         let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-        try png.write(to: desktop.appending(path: "\(device.name.replacingOccurrences(of: "/", with: "-")) \(date).png"), options: .atomic)
+        let url = desktop.appending(path: "\(device.name.replacingOccurrences(of: "/", with: "-")) \(date).png")
+        try png.write(to: url, options: .atomic)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(png, forType: .png)
+        let saved = SavedScreenshot(deviceID: device.id, url: url, thumbnail: NSImage(data: png))
+        savedScreenshot = saved
+        scheduleScreenshotDismissal(saved.id)
+    }
+
+    func screenshotHovered(_ id: UUID, hovering: Bool) {
+        guard savedScreenshot?.id == id else { return }
+        screenshotDismissal?.cancel()
+        if !hovering { scheduleScreenshotDismissal(id) }
+    }
+
+    func revealScreenshot(_ saved: SavedScreenshot) {
+        NSWorkspace.shared.activateFileViewerSelecting([saved.url])
+        if savedScreenshot?.id == saved.id {
+            screenshotDismissal?.cancel()
+            savedScreenshot = nil
+        }
+    }
+
+    private func scheduleScreenshotDismissal(_ id: UUID) {
+        screenshotDismissal?.cancel()
+        screenshotDismissal = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            if savedScreenshot?.id == id { savedScreenshot = nil }
+        }
     }
 
     private static func getprop(_ serial: String) async -> [String: String] {

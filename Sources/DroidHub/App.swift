@@ -315,6 +315,7 @@ struct DeviceView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeOut(duration: 0.18), value: mirror != nil)
+            .modifier(ScreenshotNotice(deviceID: device.id))
             .safeAreaInset(edge: .bottom) {
                 if let mirror { controls(mirror) }
             }

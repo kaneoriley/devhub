@@ -5,7 +5,7 @@
 # The scrcpy server version must match the protocol in Mirror.swift.
 set -e
 cd "$(dirname "$0")"
-SCRCPY=4.1
+SCRCPY=5.0.1
 VERSION=$(cat version.txt)
 JAR=".build/scrcpy-server-v$SCRCPY"
 mkdir -p .build

@@ -79,6 +79,7 @@ struct AppleSimulatorView: View {
             }
             .padding(32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .modifier(ScreenshotNotice(deviceID: device.id))
             .safeAreaInset(edge: .bottom) { controls(mirror) }
             .transition(.opacity)
         } else if let failure {

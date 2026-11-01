@@ -8,7 +8,7 @@
   [![release](https://img.shields.io/github/v/release/eduardoborges/droidhub)](https://github.com/eduardoborges/droidhub/releases)
   [![platform](https://img.shields.io/badge/platform-macOS%2026%2B-blue)](#requirements)
   [![swift](https://img.shields.io/badge/Swift-SwiftUI-orange)](Sources/DroidHub/)
-  [![scrcpy](https://img.shields.io/badge/scrcpy-4.1-green)](https://github.com/Genymobile/scrcpy)
+  [![scrcpy](https://img.shields.io/badge/scrcpy-5.0.1-green)](https://github.com/Genymobile/scrcpy)
   [![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
@@ -35,7 +35,7 @@ The Android emulator draws its own frameless window with a toolbar floating besi
 And the rest:
 
 - Back, Home and Recents in a floating bar at the bottom, volume and power in the toolbar.
-- ⌘S saves the device frame currently shown in DroidHub to the Desktop and copies it to the clipboard, like Simulator does. Screenshots use the mirrored display at its original resolution, including when a Resizable or foldable emulator changes displays.
+- ⌘S saves the device frame currently shown in DroidHub to the Desktop and copies it to the clipboard, like Simulator does. A thumbnail confirmation above the controls opens the saved file in Finder. Screenshots use the mirrored display at its original resolution, including when a Resizable or foldable emulator changes displays.
 - ⌘→ rotates the device.
 - Screen corners follow Android's reported per-display radii, including after rotation, resizing, or folding. Displays with no reported rounding keep their full rectangular image.
 - Drop an APK onto the device to install it, or drop a base APK and its splits together to install one app. Other files copy to the device's Downloads folder (`/sdcard/Download/`). Drop APKs and other files separately; folders aren't supported. Progress and errors appear in the window.

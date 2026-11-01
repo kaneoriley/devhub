@@ -8,7 +8,7 @@ import Testing
     #expect(H264.avcc(annexB) == Data([0, 0, 0, 3, 0x67, 1, 2, 0, 0, 0, 2, 0x68, 3, 0, 0, 0, 4, 0x65, 4, 5, 6]))
 }
 
-// Sizes and layouts from scrcpy's app/src/control_msg.c.
+// Sizes and layouts from scrcpy 5.0.1's app/src/control_msg.c.
 @Test func controlMessages() {
     let touch = Control.touch(0, x: 10, y: 20, width: 1080, height: 2424)
     #expect(touch.count == 32)

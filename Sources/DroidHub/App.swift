@@ -32,6 +32,7 @@ struct ContentView: View {
     @AppStorage("deviceList.showGroups") private var showGroups = true
     @State private var query = ""
     @State private var panel: Panel?
+    @AppStorage("inspector.width") private var inspectorWidth = 300.0
     @State private var creating: NewDeviceKind?
 
     private var listing: DeviceList {
@@ -73,16 +74,17 @@ struct ContentView: View {
         } detail: {
             if let device = hub.selected {
                 if let simulator = device.simulator {
-                    AppleSimulatorView(device: device, simulator: simulator).id(device.id)
+                    AppleSimulatorView(device: device, simulator: simulator, panel: $panel, inspectorWidth: $inspectorWidth).id(device.id)
                 } else if let apple = device.appleDevice {
                     AppleDeviceView(device: device, apple: apple).id(device.id)
                 } else {
-                    DeviceView(device: device, panel: $panel).id(device.id)
+                    DeviceView(device: device, panel: $panel, inspectorWidth: $inspectorWidth).id(device.id)
                 }
             } else {
                 ContentUnavailableView("No Devices", systemImage: "smartphone", description: Text("Create an emulator or connect a device. Apple simulators use your selected Xcode installation."))
             }
         }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .task { await hub.poll() }
         .onChange(of: hub.devices, initial: true) { _, _ in validateSelection() }
         .onChange(of: deviceFilter) { _, _ in validateSelection() }
@@ -175,6 +177,7 @@ struct DeviceView: View {
     @Environment(Hub.self) private var hub
     let device: Device
     @Binding var panel: Panel?
+    @Binding var inspectorWidth: Double
     @State private var session: AndroidMirrorSession?
     @State private var sessionToken: UUID?
     private var mirror: Mirror? {
@@ -303,31 +306,20 @@ struct DeviceView: View {
             }
             .navigationTitle(device.name)
             .navigationSubtitle(device.release.isEmpty ? device.detail : "Android \(device.release)")
-            .toolbar {
-                if let mirror {
-                    ToolbarItemGroup {
-                        Button("Volume Down", systemImage: "speaker.wave.1") { mirror.key(25) }
-                        Button("Volume Up", systemImage: "speaker.wave.3") { mirror.key(24) }
-                        Button("Power", systemImage: "power") { mirror.key(26) }
-                    }
+            .modifier(DeviceInspector(panel: $panel, width: $inspectorWidth, available: Panel.allCases, connected: mirror != nil,
+                                      volumeDown: { mirror?.key(25) }, volumeUp: { mirror?.key(24) }, power: { mirror?.key(26) },
+                                      progress: panel == nil ? 0 : 1) { selected in
+                Group {
+                    if let serial = device.serial {
+                        switch selected {
+                        case .logs: LogsView(serial: serial)
+                        case .crashes: CrashesView(serial: serial)
+                        case .settings: SettingsView(device: device, serial: serial)
+                        }
+                    } else { ContentUnavailableView("Offline", systemImage: "powersleep") }
                 }
-                ToolbarItemGroup {
-                    ForEach(Panel.allCases, id: \.self) { p in
-                        Toggle(p.title, systemImage: p.icon, isOn: Binding(get: { panel == p }, set: { panel = $0 ? p : nil }))
-                    }
-                }
-            }
-            .inspector(isPresented: Binding(get: { panel != nil }, set: { if !$0 { panel = nil } })) {
-                if let serial = device.serial {
-                    switch panel {
-                    case .logs: LogsView(serial: serial)
-                    case .crashes: CrashesView(serial: serial)
-                    default: SettingsView(device: device, serial: serial)
-                    }
-                } else {
-                    ContentUnavailableView("Offline", systemImage: "powersleep")
-                }
-            }
+            })
+            .animation(.easeInOut(duration: 0.24), value: panel != nil)
     }
 
     @ViewBuilder private var content: some View {
@@ -799,29 +791,47 @@ struct SettingsView: View {
     let device: Device
     let serial: String
     @State private var dark = false
+    @State private var automaticAppearance = false
+    private static let fontScales = [0.85, 1, 1.15, 1.3, 1.5, 1.8, 2]
     @State private var fontScale = 1.0
+    @State private var fontIndex = 1.0
     @State private var showTaps = false
     @State private var layoutBounds = false
     @State private var screen = ""
+    @State private var loading = true
+    @State private var saving = false
+    @State private var failure: String?
 
     var body: some View {
         Form {
-            Section("Appearance") {
-                Picker("Appearance", selection: apply($dark) { "cmd uimode night \($0 ? "yes" : "no")" }) {
-                    Text("Light").tag(false)
-                    Text("Dark").tag(true)
-                }
-                .pickerStyle(.segmented)
-                Picker("Font Size", selection: apply($fontScale) { "settings put system font_scale \($0)" }) {
-                    ForEach([0.85, 1, 1.15, 1.3, 1.5, 1.8, 2], id: \.self) { Text("\(Int($0 * 100))%").tag($0) }
-                }
+            Section {
+                LabeledContent {
+                    AppearanceControl(dark: Binding(get: { dark }, set: { value in
+                        automaticAppearance = false
+                        apply($dark) { "cmd uimode night \($0 ? "yes" : "no")" }.wrappedValue = value
+                    }), automatic: automaticAppearance, setAutomatic: {
+                        automaticAppearance = true
+                        apply($dark) { _ in "cmd uimode night auto" }.wrappedValue = false
+                    })
+                } label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
+                LabeledContent {
+                    TextSizeControl(value: $fontIndex, count: Self.fontScales.count, title: "Font Size", description: "\(Int(Self.fontScales[Int(fontIndex)] * 100))%") {
+                        let scale = Self.fontScales[Int(fontIndex)]
+                        apply($fontScale) { "settings put system font_scale \($0)" }.wrappedValue = scale
+                    }
+                } label: { SettingsLabel(title: "Font Size", icon: "textformat.size") }
+                Toggle(isOn: apply($showTaps) { "settings put system show_touches \($0 ? 1 : 0)" }) {
+                    SettingsLabel(title: "Show Taps", icon: "hand.tap")
+                }.accessibilityLabel("Show Taps")
+                // SYSPROPS_TRANSACTION refreshes layout bounds in running apps.
+                Toggle(isOn: apply($layoutBounds) { "setprop debug.layout \($0); service call activity 1599295570" }) {
+                    SettingsLabel(title: "Layout Bounds", icon: "square.on.square.dashed")
+                }.accessibilityLabel("Layout Bounds")
             }
-            Section("Debug") {
-                Toggle("Show Taps", isOn: apply($showTaps) { "settings put system show_touches \($0 ? 1 : 0)" })
-                    .accessibilityLabel("Show Taps")
-                // 1599295570 is SYSPROPS_TRANSACTION: makes running apps pick up the new property.
-                Toggle("Layout Bounds", isOn: apply($layoutBounds) { "setprop debug.layout \($0); service call activity 1599295570" })
-                    .accessibilityLabel("Layout Bounds")
+            Section {
+                Button("Reset to Defaults", systemImage: "arrow.counterclockwise", action: reset)
+                    .help("Restore the device's default appearance, 100% font size, and turn Show Taps and Layout Bounds off.")
+                if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
             }
             Section("Device") {
                 LabeledContent("Model", value: device.model)
@@ -832,7 +842,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .inspectorColumnWidth(min: 240, ideal: 280)
+        .toggleStyle(.switch)
+        .disabled(loading || saving)
         .task { await load() }
     }
 
@@ -840,11 +851,27 @@ struct SettingsView: View {
     private func apply<T>(_ value: Binding<T>, _ command: @escaping (T) -> String) -> Binding<T> {
         Binding(get: { value.wrappedValue }, set: { new in
             value.wrappedValue = new
-            Task { await adb("-s", serial, "shell", command(new)) }
+            saving = true; failure = nil
+            Task { @MainActor in
+                defer { saving = false }
+                do { try await runADB(["-s", serial, "shell", command(new)]).checked() }
+                catch { await load(); failure = String(describing: error) }
+            }
         })
     }
 
+    private func reset() {
+        saving = true; failure = nil
+        Task { @MainActor in
+            defer { saving = false }
+            do { try await AndroidSettingsDefaults.reset(serial: serial); await load() }
+            catch { await load(); failure = String(describing: error) }
+        }
+    }
+
     private func load() async {
+        loading = true
+        defer { loading = false }
         func shell(_ cmd: String) async -> String {
             await adb("-s", serial, "shell", cmd).trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -854,8 +881,11 @@ struct SettingsView: View {
         async let bounds = shell("getprop debug.layout")
         async let size = shell("wm size")
         async let density = shell("wm density")
-        dark = await night.hasSuffix("yes")
+        let nightMode = await night
+        dark = nightMode.hasSuffix("yes")
+        automaticAppearance = nightMode.hasSuffix("auto")
         fontScale = Double(await scale) ?? 1
+        fontIndex = Double(Self.fontScales.indices.min { abs(Self.fontScales[$0] - fontScale) < abs(Self.fontScales[$1] - fontScale) } ?? 1)
         showTaps = await taps == "1"
         layoutBounds = await bounds == "true"
         let last = { (s: String) in s.split(separator: "\n").last?.split(separator: ":").last?.trimmingCharacters(in: .whitespaces) ?? "" }

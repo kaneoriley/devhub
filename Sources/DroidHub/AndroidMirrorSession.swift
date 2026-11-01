@@ -1,7 +1,7 @@
 import AppKit
 import Observation
 
-/// Keep the scrcpy transport and its H.264 reference frames when changing selection.
+/// Keep the scrcpy transport when changing selection, decoding only while visible.
 /// The shared cache bounds the number of retained servers and hardware decoders.
 @Observable @MainActor final class AndroidMirrorSession: DeviceSession {
     let mirror: Mirror
@@ -47,8 +47,8 @@ import Observation
         try await task.value
     }
 
-    func activate() { mirror.clipboardEnabled = true }
-    func deactivate() { mirror.clipboardEnabled = false }
+    func activate() { mirror.clipboardEnabled = true; mirror.setVideoActive(true) }
+    func deactivate() { mirror.clipboardEnabled = false; mirror.setVideoActive(false) }
     func stop() {
         closed = true; isConnected = false
         connection?.cancel(); connection = nil

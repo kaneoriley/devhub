@@ -17,9 +17,10 @@ final class Mirror: @unchecked Sendable {
     var onClose: (() -> Void)?
     /// Current video size in device pixels. Main thread only.
     private(set) var size = CGSize.zero
-    /// Offscreen sessions keep decoding reference frames but cannot replace the Mac clipboard.
+    /// Only the selected device can replace the Mac clipboard.
     var clipboardEnabled = false
 
+    private let frameGate = VideoFrameGate()
     private var server: Process?
     private var video: Socket?
     private var control: Socket?
@@ -98,6 +99,7 @@ final class Mirror: @unchecked Sendable {
     }
 
     @MainActor func stop() {
+        frameGate.setActive(false)
         closed = true
         densityTask?.cancel(); densityTask = nil
         log?.fileHandleForReading.readabilityHandler = nil
@@ -112,6 +114,17 @@ final class Mirror: @unchecked Sendable {
         if let remoteJar {
             let args = ["-s", serial, "shell", "rm", "-f", remoteJar]
             Self.cleanup(args)
+        }
+    }
+
+    @MainActor func setVideoActive(_ active: Bool) {
+        guard frameGate.setActive(active) else { return }
+        if active {
+            // A fresh capture starts with a keyframe. Keep the cached image visible
+            // while it arrives, reusing the existing server and sockets.
+            if control != nil { send(Control.resetVideo()) }
+        } else {
+            layer.sampleBufferRenderer.flush()
         }
     }
 
@@ -218,19 +231,20 @@ final class Mirror: @unchecked Sendable {
                 format = H264.format(config: packet)
                 continue
             }
-            guard let format, let sample = H264.sample(packet, format: format) else { continue }
+            guard let format, let frame = frameGate.accept(keyframe: flags & (1 << 61) != 0),
+                  let sample = H264.sample(packet, format: format) else { continue }
             let newSize = pendingSize
             pendingSize = nil
             // Keep frame and geometry updates in order, and reset the decoder at a new
             // capture session instead of reusing reference frames from the previous size.
             DispatchQueue.main.async {
-                guard !self.closed else { return }
+                guard !self.closed, self.frameGate.isCurrent(frame) else { return }
                 let renderer = self.layer.sampleBufferRenderer
                 if let newSize {
                     renderer.flush()
                     self.size = newSize
                     self.onSize?(newSize)
-                } else if renderer.status == .failed { renderer.flush() }
+                } else if frame.resetDecoder || renderer.status == .failed { renderer.flush() }
                 renderer.enqueue(sample)
             }
         }
@@ -259,6 +273,9 @@ final class Mirror: @unchecked Sendable {
 }
 
 enum Control {
+    /// scrcpy 5.0.1 TYPE_RESET_VIDEO, with no payload.
+    static func resetVideo() -> Data { Data([17]) }
+
     static func key(_ action: UInt8, _ code: UInt32, meta: UInt32 = 0) -> Data {
         var d = Data([0, action])
         d.append(be: code)

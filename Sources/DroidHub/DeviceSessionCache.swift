@@ -26,7 +26,7 @@ extension DeviceSession { var canReuse: Bool { true } }
     private var sequence: UInt64 = 0
     private let capacity: Int
 
-    init(capacity: Int = 3) { self.capacity = max(1, capacity) }
+    init(capacity: Int = 12) { self.capacity = max(1, capacity) }
 
     func acquire(_ key: String, create: () -> Session) -> Lease {
         if let entry = entries[key], !entry.session.canReuse {

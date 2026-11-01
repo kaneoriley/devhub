@@ -5,6 +5,8 @@ struct AppleSimulatorView: View {
     @Environment(Hub.self) private var hub
     let device: Device
     let simulator: AppleSimulator
+    @Binding var panel: Panel?
+    @Binding var inspectorWidth: Double
     @State private var mirror: SimulatorMirror?
     @State private var sessionToken: UUID?
     @State private var failure: String?
@@ -60,15 +62,17 @@ struct AppleSimulatorView: View {
             .alert("Simulator Action Failed", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
                 Button("OK", role: .cancel) { actionFailure = nil }
             } message: { Text(actionFailure ?? "") }
-            .toolbar {
-                if let mirror, mirror.isConnected, mirror.hasFrame {
-                    ToolbarItemGroup {
-                        Button("Volume Down", systemImage: "speaker.wave.1") { mirror.button(0xea) }
-                        Button("Volume Up", systemImage: "speaker.wave.3") { mirror.button(0xe9) }
-                        Button("Power", systemImage: "power") { mirror.button(0x30) }
-                    }
+            .modifier(DeviceInspector(panel: $panel, width: $inspectorWidth, available: [.settings],
+                                      connected: mirror?.isConnected == true && mirror?.hasFrame == true,
+                                      volumeDown: { mirror?.button(0xea) }, volumeUp: { mirror?.button(0xe9) }, power: { mirror?.button(0x30) },
+                                      progress: panel == nil ? 0 : 1) { _ in
+                Group {
+                    if simulator.isBooted { SimulatorSettingsView(device: device, simulator: simulator) }
+                    else { ContentUnavailableView("Offline", systemImage: "powersleep") }
                 }
-            }
+            })
+            .animation(.easeInOut(duration: 0.24), value: panel != nil)
+            .onAppear { if panel != nil { panel = .settings } }
     }
 
     @ViewBuilder private var content: some View {

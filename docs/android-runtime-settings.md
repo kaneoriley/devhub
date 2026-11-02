@@ -1,6 +1,6 @@
 # Android runtime settings
 
-This guide covers every live Android setting in the inspector: Appearance (dark theme), Navigation Mode, TalkBack, Select to Speak, Font Size, Display Size, Show Taps and Layout Bounds, plus Reset to Defaults. These are separate from the saved AVD configuration dialog and require a connected, booted Android device. The configuration dialog remains available while an emulator is off.
+This guide covers every live Android setting in the Settings inspector: Appearance (dark theme), Navigation Mode, TalkBack, Select to Speak, Font Size, Display Size, Show Taps and Layout Bounds, plus Reset to Defaults. These require a connected, booted Android device. Read-only device details and Edit Configuration live in the separate Info inspector; the configuration dialog remains available while an emulator is off.
 
 ## Upstream rules
 
@@ -52,17 +52,20 @@ Studio also resets per-app language when it exposes that setting. DroidHub does 
 
 ## Implementation and verification
 
+- `Sources/DroidHub/AndroidSettingsCache.swift`: retained per-device snapshots for all runtime settings and capability availability. Discovery prefetches connected devices. Switching devices/tabs reuses their controls and last-known values immediately; three-second background value refreshes keep them visible. Package/service availability is reprobed every 60 seconds or after reconnecting. Failed probes preserve known capabilities; a successful probe can reflect a real package change. Offline AVDs retain their cached controls in a disabled state, and removed devices are evicted. Queries are coalesced, while revision and connection checks prevent stale replies from undoing edits or publishing another connection's values.
 - `Sources/DroidHub/AndroidUISettings.swift`: capability/state probes, density algorithm, commands, component handling and explicit density preferences.
-- `Sources/DroidHub/App.swift`: `SettingsView` owns Appearance, Font Size, Show Taps and Layout Bounds state/commands, integrates the newer runtime controls, and handles inspector refresh, Resizable selection/synchronization and mirror density refresh.
+- `Sources/DroidHub/App.swift`: `SettingsView` displays cached state, commits changes through the shared state model, and handles slider editing and mirror density refresh. Device view code also handles Resizable selection/synchronization.
 - `Sources/DroidHub/DeviceSettings.swift`: shared appearance/font controls and `AndroidSettingsDefaults`, which resets the complete Android settings list.
 - `Sources/DroidHub/DeviceActions.swift`: preserve a known intentional density during Resizable synchronization.
-- `Tests/DroidHubTests/AndroidUISettingsTests.swift` and `DeviceSettingsTests.swift`: capability restrictions, density steps, preserving unrelated settings, error handling, reset, Resizable defaults and reconnect behavior.
+- `Tests/DroidHubTests/AndroidSettingsCacheTests.swift`, `AndroidUISettingsTests.swift` and `DeviceSettingsTests.swift`: capability restrictions, density steps, preserving unrelated settings, error handling, reset, device isolation, stale replies, failed probes, offline/reconnect behavior and Resizable defaults.
 
 Run `swift test` and `./build.sh`. The optional live test requires an explicitly named emulator:
 
 ```sh
 DROIDHUB_TEST_UI_SETTINGS_ANDROID=emulator-5554 swift test
 ```
+
+For a read-only check of the complete cached Android snapshot, use `DROIDHUB_TEST_ANDROID_SETTINGS_CACHE=emulator-5554 swift test`. That check reads settings without changing them.
 
 It changes navigation, display size and Select to Speak where available, then restores the original density, navigation and exact accessibility settings. It refuses physical-device serials. This live test does not exercise Appearance, Font Size, Show Taps or Layout Bounds; verify those separately when changing their implementation.
 

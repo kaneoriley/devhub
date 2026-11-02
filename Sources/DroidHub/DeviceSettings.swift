@@ -128,24 +128,23 @@ struct SimulatorAppearance {
 }
 
 struct SimulatorSettingsView: View {
-    let device: Device
-    let simulator: AppleSimulator
-    @State private var appearance: SimulatorAppearance?
-    @State private var dark = false
-    @State private var textIndex = 3.0
-    @State private var borders = false
-    @State private var loading = true
-    @State private var saving = false
-    @State private var failure: String?
+    let settings: SimulatorSettingsState
+    @State private var textIndex: Double
+
+    init(settings: SimulatorSettingsState) {
+        self.settings = settings
+        _textIndex = State(initialValue: Double(settings.textIndex))
+    }
 
     var body: some View {
         Form {
             Section {
-                if appearance?.dark != nil {
-                    LabeledContent { AppearanceControl(dark: Binding(get: { dark }, set: { dark = $0; apply(.appearance($0)) })) }
-                        label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
+                if settings.appearance?.dark != nil {
+                    LabeledContent {
+                        AppearanceControl(dark: Binding(get: { settings.appearance?.dark ?? false }, set: { apply(.appearance($0)) }))
+                    } label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
                 }
-                if appearance?.textSize != nil {
+                if settings.appearance?.textSize != nil {
                     LabeledContent {
                         TextSizeControl(value: $textIndex, count: SimulatorAppearance.textSizes.count, title: "Text Size",
                                         description: SimulatorAppearance.textSizes[Int(textIndex)].replacingOccurrences(of: "-", with: " ").capitalized) {
@@ -153,56 +152,28 @@ struct SimulatorSettingsView: View {
                         }
                     } label: { SettingsLabel(title: "Text Size", icon: "textformat.size") }
                 }
-                if appearance?.borders != nil {
-                    Toggle(isOn: Binding(get: { borders }, set: { borders = $0; apply(.borders($0)) })) {
+                if settings.appearance?.borders != nil {
+                    Toggle(isOn: Binding(get: { settings.appearance?.borders ?? false }, set: { apply(.borders($0)) })) {
                         SettingsLabel(title: "Show Borders", icon: "square.on.square.dashed")
                     }
                 }
-                if loading { ProgressView().controlSize(.small) }
-                if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
+                if settings.appearance == nil, settings.failure == nil { ProgressView().controlSize(.small) }
+                if let failure = settings.failure { Text(failure).font(.caption).foregroundStyle(.red) }
             } footer: {
-                SettingsFooterButton(title: "Reset to Defaults", icon: "arrow.counterclockwise", alignment: .trailing, action: reset)
-                    .help("Restore Light appearance, Large text size, and Show Borders off.")
-                    .disabled(appearance == nil || loading || saving)
-            }.disabled(loading || saving)
-            Section("Device") {
-                LabeledContent("Model", value: device.model)
-                LabeledContent("OS", value: simulator.runtime)
-            }
+                SettingsFooterButton(title: "Reset to Defaults", icon: "arrow.counterclockwise", alignment: .trailing) {
+                    Task { await settings.reset() }
+                }
+                .help("Restore Light appearance, Large text size, and Show Borders off.")
+                .disabled(settings.appearance == nil || settings.saving)
+            }.disabled(settings.appearance == nil || settings.saving)
         }
         .formStyle(.grouped).toggleStyle(.switch)
-        .task { await load() }
-    }
-
-    private func load() async {
-        loading = true
-        defer { loading = false }
-        do {
-            let state = try await SimulatorAppearance.load(simulator.udid)
-            appearance = state; dark = state.dark ?? false; borders = state.borders ?? false
-            textIndex = Double(state.textSize.flatMap { SimulatorAppearance.textSizes.firstIndex(of: $0) } ?? 3)
-            failure = nil
-        } catch { failure = String(describing: error) }
-    }
-
-    private func reset() {
-        guard let appearance else { return }
-        saving = true; failure = nil
-        Task { @MainActor in
-            defer { saving = false }
-            do { try await appearance.reset(id: simulator.udid); await load() }
-            catch { await load(); failure = String(describing: error) }
-        }
+        .task { await settings.refresh() }
+        .onChange(of: settings.appearance?.textSize) { _, _ in textIndex = Double(settings.textIndex) }
     }
 
     private func apply(_ change: SimulatorAppearance.Change) {
-        guard let appearance else { return }
-        saving = true; failure = nil
-        Task { @MainActor in
-            defer { saving = false }
-            do { try await appearance.apply(change, id: simulator.udid) }
-            catch { await load(); failure = String(describing: error) }
-        }
+        Task { await settings.apply(change) }
     }
 }
 

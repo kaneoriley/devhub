@@ -64,6 +64,8 @@ func adb(_ args: String...) async -> String {
 final class Hub {
     @ObservationIgnored private var displayControllers: [String: DisplayController] = [:]
     @ObservationIgnored let simulatorSessions = DeviceSessionCache<SimulatorMirror>()
+    @ObservationIgnored let simulatorSettings = SimulatorSettingsCache()
+    @ObservationIgnored let androidSettings = AndroidSettingsCache()
     @ObservationIgnored let androidSessions = DeviceSessionCache<AndroidMirrorSession>()
 
     func displayController(serial: String, isEmulator: Bool) -> DisplayController {
@@ -160,7 +162,9 @@ final class Hub {
         list += await simulators
         guard request == refreshRequest else { return }
         simulatorSessions.retain(Set(list.compactMap { $0.simulator?.isBooted == true ? $0.simulator?.udid : nil }))
+        simulatorSettings.prepare(Set(list.compactMap { $0.simulator?.isBooted == true ? $0.simulator?.udid : nil }))
         androidSessions.retain(Set(list.compactMap(\.serial)))
+        androidSettings.prepare(list)
         booting.subtract(list.filter { $0.simulator == nil && $0.isRunning }.map(\.id))
         if devices != list { devices = list }
         if selection != nil, selected == nil { selection = nil }

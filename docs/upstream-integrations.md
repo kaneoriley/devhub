@@ -43,7 +43,7 @@ Find the current framework locations relative to that Xcode and the system's Cor
 | --- | --- | --- |
 | Discovery and filtering unused definitions | `AppleSimulator.swift`, `SimulatorCatalog.swift`, `AppleDevice.swift`, `Sources/SimulatorBridge/` | CoreDevice inventory versus fallback CoreSimulator metadata; do not equate every definition with an actively used simulator |
 | Embedded simulator display/input | `AppleSimulator.swift`, `AppleSimulatorView.swift`, `SimulatorFrame.swift`, `SimulatorGestures.swift`, `SimulatorTouchEdge.swift`, `Sources/SimulatorBridge/SimulatorBridge.m` | Display capabilities, reported orientation, native mounting rotation, masks and touch semantics |
-| Simulator appearance/accessibility | `DeviceSettings.swift` | `devicectl device info appearance`, `device settings appearance`, supported JSON keys; older Xcode `simctl ui` fallback |
+| Simulator appearance/accessibility | `DeviceSettings.swift`, `SimulatorSettingsCache.swift` | `devicectl device info appearance`, `device settings appearance`, supported JSON keys; older Xcode `simctl ui` fallback |
 | Physical-device sharing | `AppleDevice.swift`, `AppleDeviceView.swift`, `Sources/SimulatorBridge/DeviceKitBridge.m` | Xcode DeviceKit view behavior, OS compatibility, pairing and unlock/error states |
 | Simulator creation/deletion | `SimulatorCatalog.swift`, `NewSimulator.swift`, `AppleSimulator.swift` | Installed runtime/model compatibility, shutdown checks, and existing unused definitions |
 | File imports | `SimulatorFileTransfer.swift` | Installed Files app's storage group, supported media/contact import commands, duplicate naming |
@@ -51,5 +51,7 @@ Find the current framework locations relative to that Xcode and the system's Cor
 Some source names may change as features are refactored. Use `rg --files Sources` and search for the command/selector to locate the current owner.
 
 For folding/rotation, do not assume every display has the same native mounting angle. The iPhone Duo inner display uses a different angle from its cover display; read per-display capabilities and follow reported framebuffer orientation. Check `SimulatorRotationTests.swift` before changing that mapping.
+
+Simulator settings are prefetched when discovery finds a booted simulator and retained independently of device and inspector views. Reopening Settings uses cached values immediately, coalesces in-flight reads, and refreshes values older than three seconds without hiding the controls. Successful changes and Reset update the cache; a revision check prevents an older query from overwriting them. Shutdown removes the cached state and cancels pending reads. Keep this behavior when changing the backend, and run `SimulatorSettingsCacheTests.swift` for query sharing, stale replies, failed writes, and shutdown.
 
 Existing optional live tests document their environment variables in `Tests/DroidHubTests`. Inspect the test before running it: some interact with a real simulator and must restore its original state. Run focused tests and visually check the affected device after a framework/Xcode upgrade. Relaunching DroidHub means closing the previous app process first; do not leave multiple copies running.

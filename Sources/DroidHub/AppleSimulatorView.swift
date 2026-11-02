@@ -62,17 +62,20 @@ struct AppleSimulatorView: View {
             .alert("Simulator Action Failed", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
                 Button("OK", role: .cancel) { actionFailure = nil }
             } message: { Text(actionFailure ?? "") }
-            .modifier(DeviceInspector(panel: $panel, width: $inspectorWidth, available: [.settings],
+            .modifier(DeviceInspector(panel: $panel, width: $inspectorWidth,
                                       connected: mirror?.isConnected == true && mirror?.hasFrame == true,
                                       volumeDown: { mirror?.button(0xea) }, volumeUp: { mirror?.button(0xe9) }, power: { mirror?.button(0x30) },
-                                      progress: panel == nil ? 0 : 1) { _ in
+                                      progress: panel == nil ? 0 : 1) { selected in
                 Group {
-                    if simulator.isBooted { SimulatorSettingsView(device: device, simulator: simulator) }
+                    if selected == .info {
+                        DeviceInfoView(device: device,
+                                       displaySize: mirror?.hasFrame == true ? mirror.map { $0.orientation.size($0.size) } : nil,
+                                       folded: simulator.isFoldable && mirror?.hasFrame == true ? mirror?.folded : nil)
+                    } else if simulator.isBooted { SimulatorSettingsView(settings: hub.simulatorSettings.state(for: simulator.udid)) }
                     else { ContentUnavailableView("Offline", systemImage: "powersleep") }
                 }
             })
             .animation(.easeInOut(duration: 0.24), value: panel != nil)
-            .onAppear { if panel != nil { panel = .settings } }
     }
 
     @ViewBuilder private var content: some View {

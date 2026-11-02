@@ -23,20 +23,38 @@ struct AndroidUISettings {
     var selectToSpeak = false
     var display: AndroidDisplaySize?
 
-    static func load(serial: String, kind: DeviceKind, presets: [DisplayPreset] = [], run: @escaping Runner = runADB) async -> Self {
+    static func load(serial: String, kind: DeviceKind, presets: [DisplayPreset] = [], previous: Self? = nil,
+                     refreshCapabilities: Bool = true, run: @escaping Runner = runADB) async -> Self {
         let prefix = ["-s", serial, "shell"]
-        @Sendable func read(_ args: [String]) async -> String {
-            guard let result = try? await run(prefix + args), result.status == 0 else { return "" }
+        @Sendable func read(_ args: [String]) async -> String? {
+            guard let result = try? await run(prefix + args), result.status == 0 else { return nil }
             return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         async let overlays = read(["cmd", "overlay", "list", "--user", "current", "android"])
-        async let packages = read(["pm", "list", "packages", "--user", "current", talkBackPackage])
-        async let services = read(["cmd", "package", "query-services", "--brief", "--user", "current", "-a", "android.accessibilityservice.AccessibilityService"])
+        async let packages = refreshCapabilities ? read(["pm", "list", "packages", "--user", "current", talkBackPackage]) : nil
+        async let services = refreshCapabilities ? read(["cmd", "package", "query-services", "--brief", "--user", "current", "-a", "android.accessibilityservice.AccessibilityService"]) : nil
         async let enabled = read(["settings", "--user", "current", "get", "secure", "enabled_accessibility_services"])
         async let targets = read(["settings", "--user", "current", "get", "secure", "accessibility_button_targets"])
         async let size = read(["wm", "size"])
         async let density = read(["wm", "density"])
-        return await parse(kind: kind, overlays: overlays, packages: packages, services: services, enabled: enabled, targets: targets, size: size, density: density, presets: presets)
+        let (overlayText, packageText, serviceText, enabledText, targetText, sizeText, densityText) = await (overlays, packages, services, enabled, targets, size, density)
+        var state = parse(kind: kind, overlays: overlayText ?? "", packages: packageText ?? "", services: serviceText ?? "",
+                          enabled: enabledText ?? "", targets: targetText ?? "", size: sizeText ?? "", density: densityText ?? "", presets: presets)
+        if let previous {
+            let handheld = [.phone, .tablet, .foldable, .resizable].contains(kind)
+            if !refreshCapabilities || overlayText == nil {
+                state.navigation = !handheld || previous.navigation == nil ? nil : state.navigation ?? previous.navigation
+            }
+            let packageStillInstalled = packageText?.split(whereSeparator: \.isNewline).contains { $0 == "package:\(talkBackPackage)" } == true
+            if !refreshCapabilities || packageText == nil || (serviceText == nil && packageStillInstalled) {
+                state.talkBackAvailable = previous.talkBackAvailable
+                state.selectToSpeakAvailable = (handheld || kind == .desktop) && previous.selectToSpeakAvailable
+            }
+            if enabledText == nil { state.talkBack = previous.talkBack }
+            if enabledText == nil || targetText == nil { state.selectToSpeak = previous.selectToSpeak }
+            if [.phone, .tablet, .foldable, .resizable, .desktop].contains(kind), state.display == nil { state.display = previous.display }
+        }
+        return state
     }
 
     static func parse(kind: DeviceKind, overlays: String, packages: String, services: String, enabled: String, targets: String, size: String, density: String, presets: [DisplayPreset] = []) -> Self {
@@ -110,7 +128,7 @@ struct AndroidUISettings {
 struct AndroidDisplaySize: Equatable {
     let physicalDensity: Int
     let defaultDensity: Int
-    let currentDensity: Int
+    var currentDensity: Int
     let screenSize: CGSize
     let values: [Int]
     var index: Int { values.indices.min { abs(values[$0] - currentDensity) < abs(values[$1] - currentDensity) } ?? 0 }

@@ -100,7 +100,7 @@ struct WelcomeView: View {
         VStack(spacing: 16) {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 112, height: 112)
             Text("Welcome to DroidHub").font(.system(size: 32, weight: .bold, design: .rounded))
-            Text("Android devices and Apple simulators in one window, with the screen live and clickable. Boot virtual devices, type on the screen, share the clipboard and follow Android logs.")
+            Text("Android devices and Apple simulators in one window, with the screen live and clickable. Boot virtual devices, type on the screen, share the clipboard and manage device settings.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

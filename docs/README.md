@@ -7,3 +7,5 @@ DroidHub integrates Android SDK tools, scrcpy, and frameworks supplied by the se
 - [Other upstream integrations](upstream-integrations.md): hardware catalogs, display controls, scrcpy, Apple devices, and simulator settings.
 
 Keep user-facing functionality and setup instructions in the root README. Keep implementation sources, compatibility notes, and maintenance procedures here. Record which upstream revision or installed tool version was checked when changing an integration, and update the relevant regression tests.
+
+The inspector separates read-only device information from runtime settings. Device logs and crash analysis belong in dedicated tools such as Android Studio or Xcode; DroidHub has no log/crash viewer or collector.

@@ -35,7 +35,7 @@ The initial implementation was checked on 2026-11-02 against Studio revision `22
 - `Sources/DroidHub/EmulatorConfiguration.swift`: typed capacities, config loading, compatibility, validation, INI updates, SD image generation, save conflict checks and rollback.
 - `Sources/DroidHub/EmulatorConfigurationView.swift`: shared dialog, controls, replacement confirmation, editing existing AVDs.
 - `Sources/DroidHub/NewEmulator.swift`: profile metadata, creation defaults and applying configuration to new AVDs.
-- `Sources/DroidHub/App.swift`: **Edit Configuration** below Device info in the Android settings inspector, available offline.
+- `Sources/DroidHub/DeviceInfo.swift`: **Edit Configuration** below emulator details in the Info inspector, available offline. Graphics acceleration and boot mode are read from the saved AVD configuration and refreshed when the editor closes.
 - `Sources/DroidHub/Hub.swift`: AVD directory resolution, boot arguments, and preventing DroidHub from booting a device during a save.
 - `Tests/DroidHubTests/EmulatorConfigurationTests.swift`: serialization, compatibility, file preservation, failure recovery, and SDK-backed SD card test.
 
@@ -59,4 +59,4 @@ DROIDHUB_TEST_AVD_SDCARD=1 swift test
 
 That test creates a 10 MB image in a temporary directory, checks its size and FAT signature, and verifies that a later unrelated edit preserves it. It does not edit the user's AVDs.
 
-Visually check a shut-down emulator: Settings → Edit Configuration must open without a device connection. Check Camera, Network, Startup, Storage, and Emulated Performance, both SD card modes, validation, and Cancel. Check that a running emulator explains the shutdown requirement. Exercise changes on a disposable AVD and verify them after boot, especially when upgrading the installed emulator. Avoid altering or wiping a user's existing device as a smoke test.
+Visually check a shut-down emulator: Info → Edit Configuration must open without a device connection. Check Camera, Network, Startup, Storage, and Emulated Performance, both SD card modes, validation, and Cancel. Check that a running emulator explains the shutdown requirement. Exercise changes on a disposable AVD and verify them after boot, especially when upgrading the installed emulator. Avoid altering or wiping a user's existing device as a smoke test.

@@ -1,6 +1,12 @@
 import SwiftUI
 import AppKit
 
+enum Panel: String, CaseIterable {
+    case info, settings
+    var title: String { rawValue.capitalized }
+    var icon: String { self == .info ? "info" : "slider.horizontal.3" }
+}
+
 struct InspectorGeometry {
     var width: CGFloat
     var progress: CGFloat
@@ -12,7 +18,6 @@ struct InspectorGeometry {
 struct DeviceInspector<Sidebar: View>: ViewModifier, Animatable {
     @Binding var panel: Panel?
     @Binding var width: Double
-    let available: [Panel]
     let connected: Bool
     let volumeDown: () -> Void
     let volumeUp: () -> Void
@@ -33,7 +38,7 @@ struct DeviceInspector<Sidebar: View>: ViewModifier, Animatable {
                     .inspectorColumnWidth(CGFloat(width))
             }
             .toolbar {
-                DeviceToolbar(panel: $panel, available: available, geometry: geometry,
+                DeviceToolbar(panel: $panel, geometry: geometry,
                               connected: connected, volumeDown: volumeDown, volumeUp: volumeUp, power: power)
             }
             .onChange(of: panel, initial: true) { _, selected in if let selected { lastPanel = selected } }
@@ -42,7 +47,6 @@ struct DeviceInspector<Sidebar: View>: ViewModifier, Animatable {
 
 struct DeviceToolbar: ToolbarContent {
     @Binding var panel: Panel?
-    let available: [Panel]
     let geometry: InspectorGeometry
     let connected: Bool
     let volumeDown: () -> Void
@@ -62,7 +66,7 @@ struct DeviceToolbar: ToolbarContent {
             ToolbarSpacer(.fixed, placement: .primaryAction)
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            ForEach(available, id: \.self) { item in
+            ForEach(Panel.allCases, id: \.self) { item in
                 Button(item.title, systemImage: item.icon) {
                     withAnimation(.easeInOut(duration: 0.24)) { panel = panel == item ? nil : item }
                 }

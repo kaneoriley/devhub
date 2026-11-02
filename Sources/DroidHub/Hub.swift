@@ -28,8 +28,13 @@ enum SDK {
     }()
     static let adb = root.appending(path: "platform-tools/adb").path
     static let emulator = root.appending(path: "emulator/emulator").path
-    // ponytail: ignores ANDROID_AVD_HOME and custom path= entries in the .ini files
+    // Metadata files locate each AVD's actual directory through their path= entry.
     static let avdHome = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".android/avd")
+
+    static func avdDirectory(_ id: String) -> URL {
+        if let path = Hub.ini(avdHome.appending(path: "\(id).ini"))["path"] { return URL(fileURLWithPath: path) }
+        return avdHome.appending(path: "\(id).avd")
+    }
 }
 
 /// Runs a tool and returns its stdout.
@@ -71,6 +76,7 @@ final class Hub {
     var selection: Device.ID?
     var recentSelections: [String: Double] = UserDefaults.standard.dictionary(forKey: "deviceList.recentSelections") as? [String: Double] ?? [:]
     var booting: Set<Device.ID> = []
+    var configuring: Set<Device.ID> = []
     var failure: String?
     var savedScreenshot: SavedScreenshot?
     @ObservationIgnored private var screenshotDismissal: Task<Void, Never>?
@@ -174,10 +180,10 @@ final class Hub {
             }
             return
         }
-        guard let avd = device.avd, !booting.contains(device.id) else { return }
+        guard let avd = device.avd, !booting.contains(device.id), !configuring.contains(device.id) else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: SDK.emulator)
-        let config = Self.ini(SDK.avdHome.appending(path: "\(avd).avd/config.ini"))
+        let config = Self.ini(SDK.avdDirectory(avd).appending(path: "config.ini"))
         p.arguments = Self.bootArguments(avd: avd, config: config)
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -279,7 +285,7 @@ final class Hub {
         let files = (try? FileManager.default.contentsOfDirectory(at: SDK.avdHome, includingPropertiesForKeys: nil)) ?? []
         return files.filter { $0.pathExtension == "ini" }.map { url in
             let avd = url.deletingPathExtension().lastPathComponent
-            let config = ini(SDK.avdHome.appending(path: "\(avd).avd/config.ini"))
+            let config = ini(SDK.avdDirectory(avd).appending(path: "config.ini"))
             let sysdir = config["image.sysdir.1"] ?? ""
             let imageDirectory = sysdir.hasPrefix("/") ? URL(fileURLWithPath: sysdir) : SDK.root.appending(path: sysdir)
             let imageProperties = sysdir.isEmpty ? [:] : ini(imageDirectory.appending(path: "source.properties"))

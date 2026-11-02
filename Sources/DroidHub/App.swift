@@ -310,7 +310,9 @@ struct DeviceView: View {
                                       volumeDown: { mirror?.key(25) }, volumeUp: { mirror?.key(24) }, power: { mirror?.key(26) },
                                       progress: panel == nil ? 0 : 1) { selected in
                 Group {
-                    if let serial = device.serial {
+                    if selected == .settings, device.isEmulator || device.serial != nil {
+                        SettingsView(device: device, serial: device.serial)
+                    } else if let serial = device.serial {
                         switch selected {
                         case .logs: LogsView(serial: serial)
                         case .crashes: CrashesView(serial: serial)
@@ -788,8 +790,10 @@ extension ScreenView: NSTextInputClient {
 }
 
 struct SettingsView: View {
+    @Environment(Hub.self) private var hub
     let device: Device
-    let serial: String
+    let serial: String?
+    @State private var configuring = false
     @State private var dark = false
     @State private var automaticAppearance = false
     private static let fontScales = [0.85, 1, 1.15, 1.3, 1.5, 1.8, 2]
@@ -804,52 +808,60 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section {
-                LabeledContent {
-                    AppearanceControl(dark: Binding(get: { dark }, set: { value in
-                        automaticAppearance = false
-                        apply($dark) { "cmd uimode night \($0 ? "yes" : "no")" }.wrappedValue = value
-                    }), automatic: automaticAppearance, setAutomatic: {
-                        automaticAppearance = true
-                        apply($dark) { _ in "cmd uimode night auto" }.wrappedValue = false
-                    })
-                } label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
-                LabeledContent {
-                    TextSizeControl(value: $fontIndex, count: Self.fontScales.count, title: "Font Size", description: "\(Int(Self.fontScales[Int(fontIndex)] * 100))%") {
-                        let scale = Self.fontScales[Int(fontIndex)]
-                        apply($fontScale) { "settings put system font_scale \($0)" }.wrappedValue = scale
-                    }
-                } label: { SettingsLabel(title: "Font Size", icon: "textformat.size") }
-                Toggle(isOn: apply($showTaps) { "settings put system show_touches \($0 ? 1 : 0)" }) {
-                    SettingsLabel(title: "Show Taps", icon: "hand.tap")
-                }.accessibilityLabel("Show Taps")
-                // SYSPROPS_TRANSACTION refreshes layout bounds in running apps.
-                Toggle(isOn: apply($layoutBounds) { "setprop debug.layout \($0); service call activity 1599295570" }) {
-                    SettingsLabel(title: "Layout Bounds", icon: "square.on.square.dashed")
-                }.accessibilityLabel("Layout Bounds")
+            if device.isEmulator {
+                Section {
+                    Button("Edit Configuration") { configuring = true }
+                }
             }
-            Section {
-                Button("Reset to Defaults", systemImage: "arrow.counterclockwise", action: reset)
-                    .help("Restore the device's default appearance, 100% font size, and turn Show Taps and Layout Bounds off.")
-                if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
-            }
+            Group {
+                Section {
+                    LabeledContent {
+                        AppearanceControl(dark: Binding(get: { dark }, set: { value in
+                            automaticAppearance = false
+                            apply($dark) { "cmd uimode night \($0 ? "yes" : "no")" }.wrappedValue = value
+                        }), automatic: automaticAppearance, setAutomatic: {
+                            automaticAppearance = true
+                            apply($dark) { _ in "cmd uimode night auto" }.wrappedValue = false
+                        })
+                    } label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
+                    LabeledContent {
+                        TextSizeControl(value: $fontIndex, count: Self.fontScales.count, title: "Font Size", description: "\(Int(Self.fontScales[Int(fontIndex)] * 100))%") {
+                            let scale = Self.fontScales[Int(fontIndex)]
+                            apply($fontScale) { "settings put system font_scale \($0)" }.wrappedValue = scale
+                        }
+                    } label: { SettingsLabel(title: "Font Size", icon: "textformat.size") }
+                    Toggle(isOn: apply($showTaps) { "settings put system show_touches \($0 ? 1 : 0)" }) {
+                        SettingsLabel(title: "Show Taps", icon: "hand.tap")
+                    }.accessibilityLabel("Show Taps")
+                    // SYSPROPS_TRANSACTION refreshes layout bounds in running apps.
+                    Toggle(isOn: apply($layoutBounds) { "setprop debug.layout \($0); service call activity 1599295570" }) {
+                        SettingsLabel(title: "Layout Bounds", icon: "square.on.square.dashed")
+                    }.accessibilityLabel("Layout Bounds")
+                }
+                Section {
+                    Button("Reset to Defaults", systemImage: "arrow.counterclockwise", action: reset)
+                        .help("Restore the device's default appearance, 100% font size, and turn Show Taps and Layout Bounds off.")
+                    if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
+                }
+            }.disabled(serial == nil || loading || saving)
             Section("Device") {
                 LabeledContent("Model", value: device.model)
                 LabeledContent("Android", value: device.release)
                 LabeledContent("API", value: device.api)
                 LabeledContent("Screen", value: screen)
-                LabeledContent("Serial", value: serial)
+                if let serial { LabeledContent("Serial", value: serial) }
             }
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
-        .disabled(loading || saving)
-        .task { await load() }
+        .sheet(isPresented: $configuring) { EditEmulatorConfiguration(device: device).environment(hub) }
+        .task(id: serial) { if serial != nil { await load() } }
     }
 
     /// Binding that runs the adb shell command only when the user changes the value.
     private func apply<T>(_ value: Binding<T>, _ command: @escaping (T) -> String) -> Binding<T> {
         Binding(get: { value.wrappedValue }, set: { new in
+            guard let serial else { return }
             value.wrappedValue = new
             saving = true; failure = nil
             Task { @MainActor in
@@ -861,6 +873,7 @@ struct SettingsView: View {
     }
 
     private func reset() {
+        guard let serial else { return }
         saving = true; failure = nil
         Task { @MainActor in
             defer { saving = false }
@@ -870,6 +883,7 @@ struct SettingsView: View {
     }
 
     private func load() async {
+        guard let serial else { return }
         loading = true
         defer { loading = false }
         func shell(_ cmd: String) async -> String {

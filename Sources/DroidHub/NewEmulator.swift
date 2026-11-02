@@ -13,6 +13,30 @@ struct DeviceProfile: Identifiable, Hashable {
     let landscape: Bool
     let hardware: [String: String]
     let apiRanges: [String]
+    let cameraLocations: Set<String>
+    let orientations: [String]
+    let ramMB: Int64
+    let screenSize: String
+
+    /// sdklib EmulatedProperties.minimumVmHeapSize (Android CDD 3.7).
+    var heapMB: Int64 {
+        let limits: [Int]
+        let sizes: [Int64]
+        if kind == .watch {
+            limits = [220, 280, 360, 400, 440, 480, 560]
+            sizes = [32, 36, 48, 56, 64, 88, 112, 156]
+        } else if screenSize == "xlarge" {
+            limits = [120, 160, 240, 280, 320, 360, 400, 420, 480, 560]
+            sizes = [48, 80, 96, 144, 192, 240, 288, 336, 384, 576, 768]
+        } else if screenSize == "large" {
+            limits = [120, 160, 240, 280, 320, 360, 400, 420, 480, 560]
+            sizes = [32, 48, 80, 96, 128, 160, 192, 228, 256, 384, 512]
+        } else {
+            limits = [160, 280, 360, 400, 420, 480, 560]
+            sizes = [32, 48, 80, 96, 112, 128, 192, 256]
+        }
+        return sizes[limits.firstIndex(where: { density <= $0 }) ?? limits.count]
+    }
 
     var kind: DeviceKind {
         DeviceKind.from(config: hardware.merging(["hw.device.name": id, "hw.lcd.width": "\(width)", "hw.lcd.height": "\(height)", "hw.lcd.density": "\(density)"]) { current, _ in current })
@@ -58,6 +82,15 @@ struct DeviceProfile: Identifiable, Hashable {
         skin = value("skin")
         playStore = value("playstore-enabled") == "true"
         apiRanges = ((try? node.nodes(forXPath: "./*[local-name()='software']/*[local-name()='api-level']")) ?? []).compactMap(\.stringValue)
+        cameraLocations = Set(((try? node.nodes(forXPath: ".//*[local-name()='camera']/*[local-name()='location']")) ?? []).compactMap(\.stringValue))
+        let directions = ((try? node.nodes(forXPath: "./*[local-name()='state']/*[local-name()='screen-orientation']")) ?? []).compactMap(\.stringValue)
+        orientations = ["portrait", "landscape"].filter { directions.contains($0 == "portrait" ? "port" : "land") }
+        screenSize = value("screen-size") ?? "normal"
+        let ram = (try? node.nodes(forXPath: ".//*[local-name()='ram']"))?.first as? XMLElement
+        let units: [String: Int64] = ["KiB": 1024, "MiB": 1_048_576, "GiB": 1_073_741_824]
+        let ramUnit: Int64 = units[ram?.attribute(forName: "unit")?.stringValue ?? ""] ?? 1
+        let ramAmount: Int64 = Int64(ram?.stringValue ?? "") ?? (2_147_483_648 / ramUnit)
+        ramMB = ramAmount * ramUnit / 1_048_576
         let orientation = try? node.nodes(forXPath: "./*[local-name()='state'][@default='true']/*[local-name()='screen-orientation']")
         landscape = orientation?.first?.stringValue == "land"
         var hardware: [String: String] = [:]
@@ -167,15 +200,29 @@ enum AVD {
     }
 
     /// Returns the new AVD's id.
-    static func create(name: String, device: DeviceProfile, image: SystemImage) throws -> String {
+    static func create(name: String, device: DeviceProfile, image: SystemImage, configuration: EmulatorConfiguration? = nil) async throws -> String {
         let id = id(for: name)
         let dir = SDK.avdHome.appending(path: "\(id).avd")
-        guard !exists(name) else { throw MirrorError("There's already an emulator called \(id)") }
+        guard !exists(name), !FileManager.default.fileExists(atPath: dir.path) else { throw MirrorError("There's already an emulator called \(id)") }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let skin = device.skin.map { SDK.root.appending(path: "skins/\($0)").path }.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
-        try config(name: name, device: device, image: image, skinPath: skin).write(to: dir.appending(path: "config.ini"), atomically: true, encoding: .utf8)
-        try "avd.ini.encoding=UTF-8\npath=\(dir.path)\npath.rel=avd/\(id).avd\ntarget=\(image.target)\n"
-            .write(to: SDK.avdHome.appending(path: "\(id).ini"), atomically: true, encoding: .utf8)
+        do {
+            var text = config(name: name, device: device, image: image, skinPath: skin)
+            if let configuration {
+                try configuration.validate(compatibility: EmulatorCompatibility(profile: device, config: ["abi.type": image.abi], imageDirectory: SDK.root.appending(path: image.id)))
+                text = EmulatorINI.updating(text, with: configuration.configChanges())
+            }
+            try text.write(to: dir.appending(path: "config.ini"), atomically: true, encoding: .utf8)
+            if let configuration {
+                let file = try EmulatorConfigurationFile(directory: dir)
+                try await file.save(configuration, compatibility: EmulatorCompatibility(profile: device, config: file.config, imageDirectory: file.imageDirectory), isRunning: { false })
+            }
+            try "avd.ini.encoding=UTF-8\npath=\(dir.path)\npath.rel=avd/\(id).avd\ntarget=\(image.target)\n"
+                .write(to: SDK.avdHome.appending(path: "\(id).ini"), atomically: true, encoding: .utf8)
+        } catch {
+            try? FileManager.default.removeItem(at: dir)
+            throw error
+        }
         return id
     }
 
@@ -191,7 +238,8 @@ enum AVD {
     static func isRunning(_ id: String) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-f", "--", "-avd \(id)( |$)"]
+        let escaped = NSRegularExpression.escapedPattern(for: id)
+        p.arguments = ["-f", "--", "(^|[[:space:]])(-avd[[:space:]]+|@)\(escaped)([[:space:]]|$)"]
         p.standardOutput = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return false }
         p.waitUntilExit()
@@ -237,6 +285,9 @@ struct NewEmulatorSheet: View {
     @State private var suggestedName = ""
     @State private var loaded = false
     @State private var failure: String?
+    @State private var configuration: EmulatorConfiguration?
+    @State private var configuring = false
+    @State private var creating = false
 
     private var images: [SystemImage] { catalog.images(for: selection.kind) }
     private var models: [DeviceProfile] { catalog.models(kind: selection.kind, imageID: selection.imageID) }
@@ -258,6 +309,8 @@ struct NewEmulatorSheet: View {
                         ForEach(models) { Text($0.name).tag($0.id) }
                     }
                     TextField("Name", text: $name)
+                    Button("Edit Configuration…") { configuring = true }
+                        .disabled(device == nil || image == nil)
                 } footer: {
                     if loaded && catalog.devices.isEmpty {
                         Text("The bundled device catalog couldn't be loaded. Reinstall DroidHub.")
@@ -269,15 +322,25 @@ struct NewEmulatorSheet: View {
                 }
             }
             .formStyle(.grouped)
-            .disabled(!loaded)
+            .disabled(!loaded || creating)
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                if creating { ProgressView().controlSize(.small) }
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction).disabled(creating)
                 Button("Create", action: create).keyboardShortcut(.defaultAction)
-                    .disabled(device == nil || image == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(creating || device == nil || image == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
+        .interactiveDismissDisabled(creating)
+        .sheet(isPresented: $configuring) {
+            if let device, let image {
+                let base = AVD.config(name: name, device: device, image: image, skinPath: nil)
+                let config = EmulatorConfiguration.defaults(profile: device, base: base)
+                EmulatorConfigurationDialog(title: "Emulator Configuration", initial: configuration ?? config,
+                    compatibility: EmulatorCompatibility(profile: device, config: ["abi.type": image.abi], imageDirectory: SDK.root.appending(path: image.id))) { configuration = $0 }
+            }
+        }
         .task {
             let profiles = await DeviceProfile.load()
             catalog = EmulatorCreationCatalog(devices: profiles, images: catalog.images)
@@ -293,6 +356,7 @@ struct NewEmulatorSheet: View {
             next[keyPath: key] = value
             next.reconcile(catalog)
             selection = next
+            configuration = nil
             failure = nil
             updateName()
         })
@@ -308,13 +372,16 @@ struct NewEmulatorSheet: View {
 
     private func create() {
         guard let device, let image else { return }
-        do {
-            let id = try AVD.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines), device: device, image: image)
-            Task {
+        creating = true
+        Task { @MainActor in
+            defer { creating = false }
+            do {
+                let config = configuration ?? EmulatorConfiguration.defaults(profile: device, base: AVD.config(name: name, device: device, image: image, skinPath: nil))
+                let id = try await AVD.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines), device: device, image: image, configuration: config)
                 await hub.refresh()
                 hub.selection = "avd:\(id)"
-            }
-            dismiss()
-        } catch { failure = "\(error)" }
+                dismiss()
+            } catch { failure = "\(error)" }
+        }
     }
 }

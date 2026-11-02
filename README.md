@@ -42,6 +42,7 @@ And the rest:
 - Rotate and Phone / Foldable / Tablet share a display-control capsule. Available form factors come from the AVD's configuration and emulator; unsupported segments are disabled. Dedicated foldable emulators also get Opened / Closed controls. The selection follows the device's actual size, density, and committed folding state. DroidHub boots Resizable AVDs with the emulator window hidden rather than fully headless, because resizing requires the window agent. Shut down and boot existing headless Resizable emulators once to enable switching.
 - Form-factor changes finish the emulator's transition before applying the latest queued selection, and use each preset's natural orientation. Emulator rotation turns the displayed device even when Android auto-rotate is disabled or an app locks its orientation; touch input and screenshots follow the displayed rotation.
 - The inspector uses an appearance picker and text-size slider on Android and Apple simulators. Android also offers Show Taps and Layout Bounds; simulators offer Apple’s Show Borders accessibility setting when supported by Xcode. Apple’s simulator settings do not expose an equivalent to Android’s Show Taps. **Reset to Defaults** restores Android’s device-defined default appearance, 100% font size, and disables Show Taps and Layout Bounds. On simulators it restores Light appearance, Large text size, and disables Show Borders.
+- **Edit Configuration** at the top of an Android emulator's settings opens its saved AVD configuration, including while it is off. Configure cameras, network speed and latency, startup orientation and boot mode, internal and expanded storage, CPU cores, graphics, RAM, VM heap, and preferred application ABI. Available camera, orientation, storage, and ABI options follow the hardware profile and installed system image. Shut down a running emulator before saving. Resizing a custom SD card asks before erasing its contents. The same options are available during emulator creation.
 - Physical devices connected through adb show up next to the emulators.
 - Apple simulators appear in their own sidebar section using Apple's CoreDevice discovery inventory. Unused automatic device definitions stay hidden; explicitly created simulators remain visible even before their first boot. Older toolchains fall back to CoreSimulator's default-device registry and usage metadata.
 - Shut-down Apple simulators have **Delete…** in their context menu, like Android emulators. Deletion asks for confirmation and removes the virtual device and its installed apps and data. DroidHub rechecks that the simulator is shut down before deleting it.
@@ -91,6 +92,8 @@ The script resolves the branch to a commit, downloads and validates both catalog
 Hardware profiles describe the virtual device; Android SDK tools and system images are installed separately. Updating this catalog does not download system images or alter existing AVDs.
 
 ## 🛠 Build
+
+For upstream source locations, compatibility rules, and verification steps when maintaining integrations, see [docs/](docs/README.md).
 
 Install it with Homebrew:
 

@@ -35,7 +35,7 @@ The initial implementation was checked on 2026-11-02 against Studio revision `22
 - `Sources/DroidHub/EmulatorConfiguration.swift`: typed capacities, config loading, compatibility, validation, INI updates, SD image generation, save conflict checks and rollback.
 - `Sources/DroidHub/EmulatorConfigurationView.swift`: shared dialog, controls, replacement confirmation, editing existing AVDs.
 - `Sources/DroidHub/NewEmulator.swift`: profile metadata, creation defaults and applying configuration to new AVDs.
-- `Sources/DroidHub/App.swift`: **Edit Configuration** at the top of the Android settings inspector, available offline.
+- `Sources/DroidHub/App.swift`: **Edit Configuration** below Device info in the Android settings inspector, available offline.
 - `Sources/DroidHub/Hub.swift`: AVD directory resolution, boot arguments, and preventing DroidHub from booting a device during a save.
 - `Tests/DroidHubTests/EmulatorConfigurationTests.swift`: serialization, compatibility, file preservation, failure recovery, and SDK-backed SD card test.
 

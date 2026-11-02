@@ -158,8 +158,9 @@ struct DeviceActions {
         return state
     }
 
-    func synchronizeDisplay(presets: [DisplayPreset], serial: String) async throws -> DisplayState {
+    func synchronizeDisplay(presets: [DisplayPreset], serial: String, preferredDensity: (DisplayState) -> Int? = { _ in nil }) async throws -> DisplayState {
         let state = try await displayState(serial: serial)
+        if preferredDensity(state) == state.density { return state }
         if let preset = presets.first(where: { $0.matches(state.size) }), state.density != preset.density {
             // Quick Boot can restore guest density from a different form factor. Use the
             // active resolution's AVD density, just as Google's mode-change code does.

@@ -11,6 +11,25 @@ struct SettingsLabel: View {
     }
 }
 
+/// Actions sit in the grouped form's footer, outside its cards.
+struct SettingsFooterButton: View {
+    let title: String
+    var icon: String?
+    var alignment: Alignment = .leading
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            if let icon { Label(title, systemImage: icon) }
+            else { Text(title) }
+        }
+        .font(.body)
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .frame(maxWidth: .infinity, alignment: alignment)
+    }
+}
+
 /// DeviceHub's compact value-and-spinner presentation, with a native menu.
 struct AppearanceControl: View {
     @Binding var dark: Bool
@@ -141,12 +160,11 @@ struct SimulatorSettingsView: View {
                 }
                 if loading { ProgressView().controlSize(.small) }
                 if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
-            }.disabled(loading || saving)
-            Section {
-                Button("Reset to Defaults", systemImage: "arrow.counterclockwise", action: reset)
+            } footer: {
+                SettingsFooterButton(title: "Reset to Defaults", icon: "arrow.counterclockwise", alignment: .trailing, action: reset)
                     .help("Restore Light appearance, Large text size, and Show Borders off.")
                     .disabled(appearance == nil || loading || saving)
-            }
+            }.disabled(loading || saving)
             Section("Device") {
                 LabeledContent("Model", value: device.model)
                 LabeledContent("OS", value: simulator.runtime)
@@ -190,7 +208,8 @@ struct SimulatorSettingsView: View {
 
 /// Reset only the options exposed by DroidHub, not the device's other settings.
 enum AndroidSettingsDefaults {
-    static func reset(serial: String, run: ([String]) async throws -> ADBResult = { try await runADB($0) }) async throws {
+    static func reset(serial: String, settings: AndroidUISettings? = nil, kind: DeviceKind = .phone,
+                      run: @escaping AndroidUISettings.Runner = runADB) async throws {
         let prefix = ["-s", serial, "shell"]
         let resource = try await run(prefix + ["cmd", "overlay", "lookup", "android", "android:integer/config_defaultNightMode"])
         try resource.checked()
@@ -199,11 +218,17 @@ enum AndroidSettingsDefaults {
         guard let mode, let setting = [0: "auto", 1: "no", 2: "yes"][mode] else {
             throw MirrorError("Couldn't determine this device's default appearance.")
         }
+        let runtime: AndroidUISettings
+        if let settings { runtime = settings }
+        else { runtime = await AndroidUISettings.load(serial: serial, kind: kind, run: run) }
         for command in [["cmd", "uimode", "night", setting], ["settings", "delete", "system", "font_scale"],
                         ["settings", "delete", "system", "show_touches"], ["setprop", "debug.layout", "false"],
                         ["service", "call", "activity", "1599295570"]] {
             try await run(prefix + command).checked()
         }
+        if let display = runtime.display { try await display.reset(serial: serial, run: run) }
+        if runtime.navigation != nil { try await AndroidUISettings.setNavigation(.gestures, serial: serial, run: run) }
+        try await AndroidUISettings.resetAccessibility(serial: serial, run: run)
     }
 }
 

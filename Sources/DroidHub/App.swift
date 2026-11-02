@@ -262,7 +262,9 @@ struct DeviceView: View {
                 guard !Task.isCancelled else { return }
                 var state: DisplayState?
                 if !available.isEmpty, !displayBusy, let serial = device.serial,
-                   let current = try? await DeviceActions().synchronizeDisplay(presets: available, serial: serial) {
+                   let current = try? await DeviceActions().synchronizeDisplay(presets: available, serial: serial, preferredDensity: {
+                       AndroidDisplaySizePreferences.density(deviceID: device.id, size: $0.size)
+                   }) {
                     state = current
                 }
                 guard !Task.isCancelled else { return }
@@ -311,12 +313,12 @@ struct DeviceView: View {
                                       progress: panel == nil ? 0 : 1) { selected in
                 Group {
                     if selected == .settings, device.isEmulator || device.serial != nil {
-                        SettingsView(device: device, serial: device.serial)
+                        SettingsView(device: device, serial: device.serial, refreshDensity: { await mirror?.refreshDensity() })
                     } else if let serial = device.serial {
                         switch selected {
                         case .logs: LogsView(serial: serial)
                         case .crashes: CrashesView(serial: serial)
-                        case .settings: SettingsView(device: device, serial: serial)
+                        case .settings: SettingsView(device: device, serial: serial, refreshDensity: { await mirror?.refreshDensity() })
                         }
                     } else { ContentUnavailableView("Offline", systemImage: "powersleep") }
                 }
@@ -453,6 +455,8 @@ struct DeviceView: View {
 
     private func presetID(for state: DisplayState) -> Int? {
         if let preset = presets.first(where: { state.matches($0) }) { return preset.id }
+        if AndroidDisplaySizePreferences.density(deviceID: device.id, size: state.size) == state.density,
+           let preset = presets.first(where: { $0.matches(state.size) }) { return preset.id }
         if foldConfiguration?.matchesClosedDisplay(state.size) == true {
             return foldConfiguration?.resizableMode
         }
@@ -793,9 +797,14 @@ struct SettingsView: View {
     @Environment(Hub.self) private var hub
     let device: Device
     let serial: String?
+    var refreshDensity: () async -> Void = {}
     @State private var configuring = false
     @State private var dark = false
     @State private var automaticAppearance = false
+    @State private var runtime = AndroidUISettings()
+    @State private var avdConfiguration: [String: String]?
+    @State private var displayIndex = 0.0
+    @State private var editingDisplaySize = false
     private static let fontScales = [0.85, 1, 1.15, 1.3, 1.5, 1.8, 2]
     @State private var fontScale = 1.0
     @State private var fontIndex = 1.0
@@ -806,13 +815,31 @@ struct SettingsView: View {
     @State private var saving = false
     @State private var failure: String?
 
+    private var displayPresets: [DisplayPreset] {
+        guard let avd = device.avd else { return [] }
+        return DisplayPreset.parse(Hub.ini(SDK.avdDirectory(avd).appending(path: "config.ini"))["hw.resizable.configs"] ?? "")
+    }
+
+    private var graphicsMode: String {
+        guard let config = avdConfiguration else { return "Unknown" }
+        if config["hw.gpu.enabled"] == "no" { return "Disabled" }
+        let mode = config["hw.gpu.mode"] ?? "auto"
+        return ["auto": "Automatic", "host": "Hardware", "software": "Software"][mode] ?? mode
+    }
+
+    private var bootMode: String {
+        guard let config = avdConfiguration else { return "Unknown" }
+        if config["fastboot.forceColdBoot"] == "yes" { return "Cold" }
+        if config["fastboot.forceChosenSnapshotBoot"] == "yes" { return "Snapshot" }
+        return "Quick"
+    }
+
+    private func loadConfiguration() {
+        avdConfiguration = device.avd.map { Hub.ini(SDK.avdDirectory($0).appending(path: "config.ini")) }
+    }
+
     var body: some View {
         Form {
-            if device.isEmulator {
-                Section {
-                    Button("Edit Configuration") { configuring = true }
-                }
-            }
             Group {
                 Section {
                     LabeledContent {
@@ -824,12 +851,52 @@ struct SettingsView: View {
                             apply($dark) { _ in "cmd uimode night auto" }.wrappedValue = false
                         })
                     } label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
+                    if runtime.navigation != nil {
+                        LabeledContent {
+                            Picker("Navigation Mode", selection: Binding(get: { runtime.navigation ?? .gestures }, set: { value in
+                                runtime.navigation = value
+                                changeRuntime { try await AndroidUISettings.setNavigation(value, serial: $0) }
+                            })) {
+                                ForEach(AndroidUISettings.Navigation.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            }.labelsHidden().fixedSize().accessibilityLabel("Navigation Mode")
+                        } label: { SettingsLabel(title: "Navigation Mode", icon: "hand.draw") }
+                    }
+                    if runtime.talkBackAvailable {
+                        Toggle(isOn: Binding(get: { runtime.talkBack }, set: { value in
+                            runtime.talkBack = value
+                            changeRuntime { try await AndroidUISettings.setAccessibility(.talkBack, enabled: value, serial: $0) }
+                        })) { SettingsLabel(title: "TalkBack", icon: "voiceover") }
+                    }
+                    if runtime.selectToSpeakAvailable {
+                        Toggle(isOn: Binding(get: { runtime.selectToSpeak }, set: { value in
+                            runtime.selectToSpeak = value
+                            changeRuntime { try await AndroidUISettings.setAccessibility(.selectToSpeak, enabled: value, serial: $0) }
+                        })) { SettingsLabel(title: "Select to Speak", icon: "text.bubble") }
+                    }
                     LabeledContent {
                         TextSizeControl(value: $fontIndex, count: Self.fontScales.count, title: "Font Size", description: "\(Int(Self.fontScales[Int(fontIndex)] * 100))%") {
                             let scale = Self.fontScales[Int(fontIndex)]
                             apply($fontScale) { "settings put system font_scale \($0)" }.wrappedValue = scale
                         }
                     } label: { SettingsLabel(title: "Font Size", icon: "textformat.size") }
+                    if let display = runtime.display, display.values.count > 1 {
+                        LabeledContent {
+                            Slider(value: $displayIndex, in: 0...Double(display.values.count - 1), step: 1) {
+                                Text("Display Size")
+                            } onEditingChanged: { editing in
+                                editingDisplaySize = editing
+                                if !editing {
+                                    let index = Int(displayIndex)
+                                    changeRuntime {
+                                        try await display.apply(index: index, serial: $0)
+                                        AndroidDisplaySizePreferences.record(deviceID: device.id, size: display.screenSize, density: display.values[index])
+                                    }
+                                }
+                            }
+                            .labelsHidden().frame(width: 120).accessibilityLabel("Display Size")
+                            .accessibilityValue(displayDescription(display)).help(displayDescription(display))
+                        } label: { SettingsLabel(title: "Display Size", icon: "display") }
+                    }
                     Toggle(isOn: apply($showTaps) { "settings put system show_touches \($0 ? 1 : 0)" }) {
                         SettingsLabel(title: "Show Taps", icon: "hand.tap")
                     }.accessibilityLabel("Show Taps")
@@ -837,25 +904,67 @@ struct SettingsView: View {
                     Toggle(isOn: apply($layoutBounds) { "setprop debug.layout \($0); service call activity 1599295570" }) {
                         SettingsLabel(title: "Layout Bounds", icon: "square.on.square.dashed")
                     }.accessibilityLabel("Layout Bounds")
-                }
-                Section {
-                    Button("Reset to Defaults", systemImage: "arrow.counterclockwise", action: reset)
-                        .help("Restore the device's default appearance, 100% font size, and turn Show Taps and Layout Bounds off.")
+                } footer: {
+                    SettingsFooterButton(title: "Reset to Defaults", icon: "arrow.counterclockwise", alignment: .trailing, action: reset)
+                        .help("Restore default appearance and display size, gesture navigation where supported, 100% font size, and turn TalkBack, Select to Speak, Show Taps and Layout Bounds off.")
                     if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
                 }
             }.disabled(serial == nil || loading || saving)
-            Section("Device") {
+            Section {
                 LabeledContent("Model", value: device.model)
                 LabeledContent("Android", value: device.release)
                 LabeledContent("API", value: device.api)
                 LabeledContent("Screen", value: screen)
                 if let serial { LabeledContent("Serial", value: serial) }
+                if device.isEmulator {
+                    LabeledContent("Graphics Acceleration", value: graphicsMode)
+                    LabeledContent("Boot Mode", value: bootMode)
+                }
+            } header: {
+                Text("Device")
+            } footer: {
+                if device.isEmulator {
+                    SettingsFooterButton(title: "Edit Configuration", icon: "pencil", alignment: .trailing, action: { configuring = true })
+                }
             }
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
-        .sheet(isPresented: $configuring) { EditEmulatorConfiguration(device: device).environment(hub) }
+        .sheet(isPresented: $configuring, onDismiss: loadConfiguration) { EditEmulatorConfiguration(device: device).environment(hub) }
+        .task(id: device.avd) { loadConfiguration() }
         .task(id: serial) { if serial != nil { await load() } }
+        .task(id: serial) {
+            guard let serial else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                if !loading && !saving && !editingDisplaySize {
+                    let state = await AndroidUISettings.load(serial: serial, kind: device.kind, presets: displayPresets)
+                    guard !Task.isCancelled else { return }
+                    if !loading && !saving && !editingDisplaySize { updateRuntime(state) }
+                }
+            }
+        }
+    }
+
+    private func displayDescription(_ display: AndroidDisplaySize) -> String {
+        let index = min(max(0, Int(displayIndex)), display.values.count - 1)
+        let value = display.values[index]
+        return value == display.defaultDensity ? "Default · \(value) dpi" : "\(Int((Double(value) / Double(display.defaultDensity) * 100).rounded()))% · \(value) dpi"
+    }
+
+    private func updateRuntime(_ state: AndroidUISettings) {
+        runtime = state
+        displayIndex = Double(state.display?.index ?? 0)
+    }
+
+    private func changeRuntime(_ action: @escaping (String) async throws -> Void) {
+        guard let serial else { return }
+        saving = true; failure = nil
+        Task { @MainActor in
+            defer { saving = false }
+            do { try await action(serial); await refreshDensity(); await load() }
+            catch { await load(); failure = String(describing: error) }
+        }
     }
 
     /// Binding that runs the adb shell command only when the user changes the value.
@@ -877,7 +986,13 @@ struct SettingsView: View {
         saving = true; failure = nil
         Task { @MainActor in
             defer { saving = false }
-            do { try await AndroidSettingsDefaults.reset(serial: serial); await load() }
+            do {
+                try await AndroidSettingsDefaults.reset(serial: serial, settings: runtime, kind: device.kind)
+                if let display = runtime.display {
+                    AndroidDisplaySizePreferences.record(deviceID: device.id, size: display.screenSize, density: display.defaultDensity)
+                }
+                await refreshDensity(); await load()
+            }
             catch { await load(); failure = String(describing: error) }
         }
     }
@@ -895,6 +1010,7 @@ struct SettingsView: View {
         async let bounds = shell("getprop debug.layout")
         async let size = shell("wm size")
         async let density = shell("wm density")
+        async let extra = AndroidUISettings.load(serial: serial, kind: device.kind, presets: displayPresets)
         let nightMode = await night
         dark = nightMode.hasSuffix("yes")
         automaticAppearance = nightMode.hasSuffix("auto")
@@ -902,6 +1018,7 @@ struct SettingsView: View {
         fontIndex = Double(Self.fontScales.indices.min { abs(Self.fontScales[$0] - fontScale) < abs(Self.fontScales[$1] - fontScale) } ?? 1)
         showTaps = await taps == "1"
         layoutBounds = await bounds == "true"
+        updateRuntime(await extra)
         let last = { (s: String) in s.split(separator: "\n").last?.split(separator: ":").last?.trimmingCharacters(in: .whitespaces) ?? "" }
         screen = "\(last(await size).replacingOccurrences(of: "x", with: "×")) · \(last(await density)) dpi"
     }

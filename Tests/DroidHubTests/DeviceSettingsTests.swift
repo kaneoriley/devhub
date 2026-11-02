@@ -98,7 +98,7 @@ private actor ResetRecorder {
 @Test func androidResetUsesTheDevicesDefaultThemeAndClearsOnlyOurSettings() async throws {
     for (mode, expected) in [("0", "auto"), ("1", "no"), ("2", "yes")] {
         let recorder = ResetRecorder(mode: mode)
-        try await AndroidSettingsDefaults.reset(serial: "chosen-device") { await recorder.android($0) }
+        try await AndroidSettingsDefaults.reset(serial: "chosen-device", settings: AndroidUISettings()) { await recorder.android($0) }
         let prefix = ["-s", "chosen-device", "shell"]
         #expect(await recorder.androidCalls == [
             prefix + ["cmd", "overlay", "lookup", "android", "android:integer/config_defaultNightMode"],
@@ -106,14 +106,18 @@ private actor ResetRecorder {
             prefix + ["settings", "delete", "system", "font_scale"],
             prefix + ["settings", "delete", "system", "show_touches"],
             prefix + ["setprop", "debug.layout", "false"],
-            prefix + ["service", "call", "activity", "1599295570"]])
+            prefix + ["service", "call", "activity", "1599295570"],
+            prefix + ["settings", "--user", "current", "get", "secure", "enabled_accessibility_services"],
+            prefix + ["'settings' '--user' 'current' 'delete' 'secure' 'enabled_accessibility_services'"],
+            prefix + ["settings", "--user", "current", "get", "secure", "accessibility_button_targets"],
+            prefix + ["'settings' '--user' 'current' 'delete' 'secure' 'accessibility_button_targets'"]])
     }
 }
 
 @Test func androidResetRejectsUnknownDefaultsAndStopsWhenACommandFails() async throws {
     for recorder in [ResetRecorder(mode: "unknown"), ResetRecorder(failAt: 1), ResetRecorder(failAt: 3)] {
         await #expect(throws: (any Error).self) {
-            try await AndroidSettingsDefaults.reset(serial: "device") { await recorder.android($0) }
+            try await AndroidSettingsDefaults.reset(serial: "device", settings: AndroidUISettings()) { await recorder.android($0) }
         }
         #expect(await recorder.androidCalls.count <= 3)
     }

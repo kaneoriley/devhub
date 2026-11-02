@@ -8,6 +8,8 @@ Look in `NewEmulator.swift` for profile parsing, image discovery and creation co
 
 ## Android display controls, folding, and geometry
 
+For live Navigation Mode, TalkBack, Select to Speak, Display Size and reset rules, see [Android runtime settings](android-runtime-settings.md).
+
 Compare Android Studio's [streaming emulator implementation](https://android.googlesource.com/platform/tools/adt/idea/+/mirror-goog-studio-main/streaming/src/com/android/tools/idea/streaming/emulator/) and the Android emulator's [gRPC service definitions](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android/android-grpc/services/). If a path moves, browse the repository tree rather than assuming an old class still owns the feature. Check the installed SDK emulator's own help and gRPC definitions for version compatibility.
 
 DroidHub's implementation is in `DeviceActions.swift`, `DisplayController.swift`, `DisplayGeometry.swift`, and the Android view in `App.swift`. Tests include `DisplayControllerTests.swift`, `DisplayGeometryTests.swift`, `FoldingTests.swift`, and `ScreenshotTests.swift`.

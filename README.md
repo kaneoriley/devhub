@@ -1,6 +1,7 @@
 <div align="center">
   <img src=".github/icon.png" width="128" alt="DevHub app icon">
   <h1>DevHub</h1>
+  <h4>⚠️ Entirely vibe coded. Seems to work but enter at your own risk. ⚠️</h2>
   <p>Device hub for <strong>macOS</strong>, in the spirit of the Device Hub that ships with Xcode 27. Android emulators and phones, iOS simulators, and connected iPhones and iPads in one list, with the screen live and clickable inside a normal window.<br>
   Forked from <strong><a href="https://github.com/eduardoborges/droidhub">DroidHub</a></strong> by Eduardo Borges, with Apple-device support, expanded device management, and additional controls.<br>
   <strong>Tiling friendly:</strong> there's no floating toolbar and no custom chrome, so yabai and friends tile it like any other app.<br>

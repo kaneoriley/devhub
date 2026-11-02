@@ -5,6 +5,7 @@ DevHub integrates Android SDK tools, scrcpy, and frameworks supplied by the sele
 - [Android emulator configuration](android-emulator-configuration.md): settings, compatibility, defaults, serialization, and SD card creation.
 - [Android runtime settings](android-runtime-settings.md): appearance, navigation, accessibility, font/display size, Show Taps, Layout Bounds, compatibility and reset rules.
 - [Other upstream integrations](upstream-integrations.md): hardware catalogs, display controls, scrcpy, Apple devices, and simulator settings.
+- [Local installation and upgrades](installation.md): source fingerprints, embedded checkout paths, build progress, and safe app replacement/relaunch.
 
 Keep user-facing functionality and setup instructions in the root README. Keep implementation sources, compatibility notes, and maintenance procedures here. Record which upstream revision or installed tool version was checked when changing an integration, and update the relevant regression tests.
 

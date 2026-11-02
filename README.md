@@ -33,7 +33,7 @@ DevHub brings Android and Apple devices into one native Mac window: virtual-devi
 - ⌨️ **Type on the device.** Use your Mac keyboard in Android apps and iOS simulators, including text, arrows, delete, accented characters, and input methods. Physical Apple devices use the input controls provided by Xcode's screen-sharing view.
 - 📋 **Copy and paste.** On Android devices and iOS simulators, ⌘C, ⌘X, and ⌘A copy, cut, and select all, and ⌘V pastes text from the Mac. Android also automatically syncs text copied on the selected device back to the Mac; simulator copy and cut shortcuts retrieve its clipboard.
 - 📦 **Drag-and-drop apps and files.** Install APKs (including a base APK and its splits together) on Android devices or simulator `.app` bundles on iOS simulators. Other files copy to Android's Downloads folder (`/sdcard/Download/`) or the Files app's local Downloads folder on iOS simulators. Drop apps and other files separately; Android folder drops aren't supported. Transfer progress and errors appear in the window.
-- 🚀 **Manage virtual devices.** Create, boot, shut down, and delete Android emulators and iOS simulators from the device list. Choose a form factor, OS version, and compatible model when creating either kind. Android Studio is optional; Apple simulators use your selected Xcode installation.
+- 🚀 **Manage virtual devices.** Create, boot, shut down, and delete Android emulators and iOS simulators from the device list. Choose a form factor, OS version, and compatible model when creating either kind. Virtual devices keep running when DevHub quits or restarts. Android Studio is optional; Apple simulators use your selected Xcode installation.
 
 And the rest:
 
@@ -119,7 +119,17 @@ For an Xcode installation outside the selected command-line tools location, set 
 DEVELOPER_DIR="/path/to/Xcode.app/Contents/Developer" ./build.sh
 ```
 
-To rebuild an existing checkout, quit DevHub, run `./build.sh` again, and reopen `build/DevHub.app`.
+To rebuild manually, quit DevHub, run `./build.sh` again, and reopen `build/DevHub.app`.
+
+### Install and upgrade from DevHub
+
+Open **DevHub → Check for Updates…** to view the source directory embedded by `build.sh`, choose an Applications directory (default: `~/Applications`), and install or upgrade the app there. The status compares the installed build's commit and source hash with the local Git checkout, including uncommitted changes and new files. Installed and checkout commits and hashes are shown separately, with modified working trees marked, so you can distinguish local edits from a different commit.
+
+Opening the dialog or clicking **Check Again** fetches the current branch's configured upstream and reports new remote commits. If the branch is behind or has diverged, a notice asks you to update or reconcile it using Git before upgrading DevHub. Fetching leaves your checked-out branch, index, and working files unchanged; DevHub does not pull, merge, rebase, or switch branches. Missing upstream configuration and network or authentication failures are shown in the dialog, and local builds remain available.
+
+DevHub also checks in the background at startup and when it returns from the background, and prompts if the running app differs from the local source or the upstream has newer commits. Dismissing a notice suppresses it for the same changes during that app session; new changes can prompt again. The prompt lists commit subjects and hashes missing from the running build in a scrollable area, including local and fetched upstream commits. Long histories show the latest 100 commits. Disable **Show update prompts** in the update dialog to skip automatic checks and prompts. Manual checks still work.
+
+**Install** builds a missing installation; **Upgrade** rebuilds an existing installation when its commit or source hash differs, or its build identity is unknown. A progress dialog shows build, packaging, signing, and installation steps. The app verifies the staged ad hoc signed bundle, quits, replaces the installation, and relaunches from the chosen Applications directory. Build failures leave the existing installation running. Keep the source checkout at its embedded path; if you move it, build and open DevHub once from its new location.
 
 Run the test suite:
 

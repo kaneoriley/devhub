@@ -3,15 +3,26 @@ import SwiftUI
 @main
 struct DevHubApp: App {
     @State private var hub = Hub()
+    @State private var installation = Installation()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         Window("DevHub", id: "main") {
             ContentView().environment(hub)
+                .task { await installation.checkAtStartup() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    Task { await installation.checkOnActivation() }
+                }
+                .sheet(isPresented: $installation.showUpdatePrompt) {
+                    UpdatePromptView(installation: installation) { openWindow(id: "installation") }
+                }
         }
         .defaultSize(width: 1000, height: 900)
         .commands {
-            CommandGroup(replacing: .appInfo) { Button("About DevHub") { openWindow(id: "about") } }
+            CommandGroup(replacing: .appInfo) {
+                Button("About DevHub") { openWindow(id: "about") }
+                Button("Check for Updates…") { openWindow(id: "installation") }
+            }
             CommandGroup(replacing: .help) { Button("Welcome to DevHub") { openWindow(id: "welcome") } }
         }
         Window("About DevHub", id: "about") { AboutView().environment(hub) }
@@ -19,6 +30,8 @@ struct DevHubApp: App {
             .windowResizability(.contentSize)
         Window("Welcome to DevHub", id: "welcome") { WelcomeView() }
             .windowStyle(.hiddenTitleBar)
+            .windowResizability(.contentSize)
+        Window("DevHub Installation", id: "installation") { InstallationView(installation: installation) }
             .windowResizability(.contentSize)
     }
 }

@@ -35,15 +35,13 @@ extension Hub {
 
     func bootEmulator(_ device: Device) {
         guard let avd = device.avd, !booting.contains(device.id), !configuring.contains(device.id) else { return }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: SDK.emulator)
         let config = Self.ini(SDK.avdDirectory(avd).appending(path: "config.ini"))
-        p.arguments = Self.bootArguments(avd: avd, config: config)
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        p.terminationHandler = { _ in Task { @MainActor in self.booting.remove(device.id) } }
-        guard (try? p.run()) != nil else { return }
-        booting.insert(device.id)
+        do {
+            try DetachedProcess.launch(SDK.emulator, arguments: Self.bootArguments(avd: avd, config: config)) { _ in
+                Task { @MainActor in self.booting.remove(device.id) }
+            }
+            booting.insert(device.id)
+        } catch { failure = String(describing: error) }
     }
 
     nonisolated static func bootArguments(avd: String, config: [String: String]) -> [String] {

@@ -7,18 +7,37 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 cd "$(dirname "$0")"
+ROOT="$(pwd -P)"
+BUILD_INFO="$(mktemp)"
+trap 'rm -f "$BUILD_INFO"' EXIT
+echo 'DEVHUB_STEP Preparing build identity'
+swift build -c release --product BuildInfoTool
+.build/release/BuildInfoTool "$ROOT" "$BUILD_INFO"
 SCRCPY=5.0.1
 JAR=".build/scrcpy-server-v$SCRCPY"
 mkdir -p .build
 [ -f "$JAR" ] || curl -fsSL -o "$JAR" "https://github.com/Genymobile/scrcpy/releases/download/v$SCRCPY/scrcpy-server-v$SCRCPY"
 
-swift build -c release
-APP=build/DevHub.app
+echo 'DEVHUB_STEP Building DevHub'
+swift build -c release --product DevHub
+# Do not stamp a build as current if files changed while the compiler was running.
+VERIFY_INFO="$(mktemp)"
+.build/release/BuildInfoTool "$ROOT" "$VERIFY_INFO"
+if ! cmp -s "$BUILD_INFO" "$VERIFY_INFO"; then
+  rm -f "$VERIFY_INFO"
+  echo 'Source files changed during the build. Build again.' >&2
+  exit 1
+fi
+rm -f "$VERIFY_INFO"
+echo 'DEVHUB_STEP Packaging app and resources'
+APP="${DEVHUB_BUILD_OUTPUT:-build}/DevHub.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/DevHub "$APP/Contents/MacOS/"
 cp "$JAR" "$APP/Contents/Resources/scrcpy-server"
 cp -R .build/release/DevHub_DevHub.bundle "$APP/Contents/Resources/"
+cp "$BUILD_INFO" "$APP/Contents/Resources/build-info.plist"
+cp scripts/install-update.sh "$APP/Contents/Resources/"
 
 # Icon Composer icon with layers rendered by icon/icon.py and icon/apple.swift. actool writes Assets.car,
 # which macOS 26 needs to skip the gray squircle it puts around legacy icons, plus
@@ -45,5 +64,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+echo 'DEVHUB_STEP Signing and verifying app'
 codesign --force --sign - "$APP"
+codesign --verify --strict "$APP"
 echo "$APP"

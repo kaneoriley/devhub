@@ -28,6 +28,7 @@ private actor SimulatorSettingsBackend {
         if failWrites { throw MirrorError("write failed") }
     }
     func reset(_ appearance: SimulatorAppearance) { resets += 1 }
+    func setValue(_ value: SimulatorAppearance) { self.value = value }
 }
 
 @MainActor private func settings(_ backend: SimulatorSettingsBackend) -> SimulatorSettingsState {
@@ -102,6 +103,39 @@ private func waitForReads(_ count: Int, backend: SimulatorSettingsBackend) async
     #expect(state.appearance?.dark == false && state.appearance?.textSize == "large")
     #expect(state.appearance?.borders == nil && state.appearance?.native == false)
     #expect(!state.saving)
+}
+
+@MainActor @Test func simulatorColorAndGlassWritesAndResetUpdateCachedValuesWithoutInventingCapabilities() async {
+    let state = SimulatorSettingsState(read: { SimulatorAppearance(colorFilter: .some(.none), liquidGlassOpacity: 0.5) },
+                                       write: { _, _ in }, reset: { _ in })
+    await state.refresh()
+    await state.apply(.colorFilter(.tritanopia))
+    await state.apply(.liquidGlassOpacity(0.8))
+    #expect(state.appearance?.colorFilter == .tritanopia && state.appearance?.liquidGlassOpacity == 0.8)
+    await state.apply(.liquidGlassOpacity(2))
+    #expect(state.appearance?.liquidGlassOpacity == 0.8 && !state.saving)
+    await state.reset()
+    #expect(state.appearance?.colorFilter == .some(.none) && state.appearance?.liquidGlassOpacity == 0.5)
+    let unsupported = SimulatorSettingsState(read: { SimulatorAppearance(native: false) }, write: { _, _ in
+        Issue.record("Unsupported appearance option was written")
+    }, reset: { _ in })
+    await unsupported.refresh()
+    await unsupported.apply(.colorFilter(.grayscale))
+    await unsupported.apply(.liquidGlassOpacity(0.7))
+    await unsupported.reset()
+    #expect(unsupported.appearance?.colorFilter == nil && unsupported.appearance?.liquidGlassOpacity == nil)
+}
+
+@MainActor @Test func aFailedAppleCapabilityQueryRetainsKnownControlsAndUpdatesTheirValues() async {
+    let backend = SimulatorSettingsBackend()
+    await backend.setValue(SimulatorAppearance(colorFilter: .some(.none), liquidGlassOpacity: 0.5))
+    let state = settings(backend)
+    await state.refresh()
+    #expect(state.appearance?.supportsColorFilter == true)
+    await backend.setValue(SimulatorAppearance(colorFilter: .protanopia, liquidGlassOpacity: 0.7, modernCustomizationSupported: nil))
+    await state.refresh(force: true)
+    #expect(state.appearance?.supportsColorFilter == true && state.appearance?.supportsLiquidGlass == true)
+    #expect(state.appearance?.colorFilter == .protanopia && state.appearance?.liquidGlassOpacity == 0.7)
 }
 
 @MainActor @Test func bootedSimulatorSettingsArePrefetchedRetainedAndEvictedOnShutdown() async {

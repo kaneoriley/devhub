@@ -43,8 +43,9 @@ import Observation
         let task = Task { @MainActor in
             defer { loading = false; query = nil }
             do {
-                let value = try await read()
+                var value = try await read()
                 guard !Task.isCancelled, generation == revision else { return }
+                if value.modernCustomizationSupported == nil { value.modernCustomizationSupported = appearance?.modernCustomizationSupported }
                 appearance = value; updatedAt = now(); completedRevision = generation; failure = nil
             } catch {
                 guard !Task.isCancelled, generation == revision else { return }
@@ -65,6 +66,12 @@ import Observation
             guard SimulatorAppearance.textSizes.indices.contains(index) else { saving = false; return }
             next.textSize = SimulatorAppearance.textSizes[index]
         case .borders(let enabled): next.borders = enabled
+        case .colorFilter(let filter):
+            guard original.supportsColorFilter, filter != .unknown else { saving = false; return }
+            next.colorFilter = filter
+        case .liquidGlassOpacity(let opacity):
+            guard original.supportsLiquidGlass, opacity.isFinite, (0...1).contains(opacity) else { saving = false; return }
+            next.liquidGlassOpacity = opacity
         }
         appearance = next
         do {
@@ -87,6 +94,8 @@ import Observation
             if next.dark != nil { next.dark = false }
             if next.textSize != nil { next.textSize = "large" }
             if next.borders != nil { next.borders = false }
+            if next.supportsColorFilter { next.colorFilter = SimulatorAppearance.ColorFilter.none }
+            if next.supportsLiquidGlass { next.liquidGlassOpacity = SimulatorAppearance.defaultLiquidGlassOpacity }
             appearance = next; updatedAt = now(); completedRevision = revision
         } catch {
             await refresh(force: true)

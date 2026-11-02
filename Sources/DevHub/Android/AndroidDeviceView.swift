@@ -110,6 +110,7 @@ struct AndroidDeviceView: View {
                         displayController?.selectedPreset = presetID(for: current)
                     }
                     await displayController?.synchronizeOrientation()
+                    await hub.androidSettings.state(for: device).refresh()
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 }
             }
@@ -154,7 +155,9 @@ struct AndroidDeviceView: View {
             ZStack {
                 if let mirror {
                     AndroidDeviceFrame(size: videoRotation.size(size), corners: displayCorners) {
-                        AndroidScreen(mirror: mirror, rotation: videoRotation, acceptsFiles: !transferring, receiveFiles: receive, dropTargeted: { dropTargeted = $0 })
+                        AndroidScreen(mirror: mirror, rotation: videoRotation,
+                                      colorFilter: hub.androidSettings.state(for: device).snapshot?.colorFilter?.mode,
+                                      acceptsFiles: !transferring, receiveFiles: receive, dropTargeted: { dropTargeted = $0 })
                     }
                     .padding(32)
                     .transition(.opacity)

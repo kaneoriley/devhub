@@ -3,7 +3,7 @@ import Foundation
 /// Reset only the options exposed by DevHub, not the device's other settings.
 enum AndroidSettingsDefaults {
     static func reset(serial: String, settings: AndroidUISettings? = nil, kind: DeviceKind = .phone,
-                      run: @escaping AndroidUISettings.Runner = runADB) async throws {
+                      colorFilterAvailable: Bool = false, run: @escaping AndroidUISettings.Runner = runADB) async throws {
         let prefix = ["-s", serial, "shell"]
         let resource = try await run(prefix + ["cmd", "overlay", "lookup", "android", "android:integer/config_defaultNightMode"])
         try resource.checked()
@@ -22,6 +22,7 @@ enum AndroidSettingsDefaults {
         }
         if let display = runtime.display { try await display.reset(serial: serial, run: run) }
         if runtime.navigation != nil { try await AndroidUISettings.setNavigation(.gestures, serial: serial, run: run) }
+        if colorFilterAvailable { try await AndroidColorFilter.apply(.none, serial: serial, run: run) }
         try await AndroidUISettings.resetAccessibility(serial: serial, run: run)
     }
 }

@@ -7,6 +7,7 @@ struct AndroidSettingsSnapshot {
     var fontScale = 1.0
     var showTaps = false
     var layoutBounds = false
+    var colorFilter: AndroidColorFilter?
     var runtime = AndroidUISettings()
     var fontIndex: Int { Self.fontScales.indices.min { abs(Self.fontScales[$0] - fontScale) < abs(Self.fontScales[$1] - fontScale) } ?? 1 }
 
@@ -22,17 +23,19 @@ struct AndroidSettingsSnapshot {
         async let scale = read(["settings", "get", "system", "font_scale"])
         async let taps = read(["settings", "get", "system", "show_touches"])
         async let bounds = read(["getprop", "debug.layout"])
+        async let colorFilter = AndroidColorFilter.load(serial: serial, previous: previous?.colorFilter, run: run)
         async let runtime = AndroidUISettings.load(serial: serial, kind: device.kind, presets: presets, previous: previous?.runtime,
                                                   refreshCapabilities: refreshCapabilities, run: run)
         let mode = try await night.split(separator: ":").last?.trimmingCharacters(in: .whitespaces) ?? ""
         return try await Self(nightMode: ["yes", "no", "auto"].contains(mode) ? mode : previous?.nightMode ?? "no",
-                              fontScale: Double(scale) ?? 1, showTaps: taps == "1", layoutBounds: bounds == "true", runtime: runtime)
+                              fontScale: Double(scale) ?? 1, showTaps: taps == "1", layoutBounds: bounds == "true", colorFilter: colorFilter, runtime: runtime)
     }
 }
 
 @Observable @MainActor final class AndroidSettingsState {
     enum Change {
         case appearance(String), fontSize(Int), showTaps(Bool), layoutBounds(Bool)
+        case colorFilter(AndroidColorFilter.Mode)
         case navigation(AndroidUISettings.Navigation), talkBack(Bool), selectToSpeak(Bool), displaySize(Int)
     }
     private(set) var snapshot: AndroidSettingsSnapshot?
@@ -108,6 +111,9 @@ struct AndroidSettingsSnapshot {
             next.fontScale = AndroidSettingsSnapshot.fontScales[index]
         case .showTaps(let on): next.showTaps = on
         case .layoutBounds(let on): next.layoutBounds = on
+        case .colorFilter(let mode):
+            guard next.colorFilter != nil else { return }
+            next.colorFilter?.mode = mode.rawValue
         case .navigation(let mode): next.runtime.navigation = mode
         case .talkBack(let on): next.runtime.talkBack = on
         case .selectToSpeak(let on): next.runtime.selectToSpeak = on
@@ -123,6 +129,7 @@ struct AndroidSettingsSnapshot {
             case .appearance(let mode): try await run(prefix + ["cmd", "uimode", "night", mode]).checked()
             case .fontSize: try await run(prefix + ["settings", "put", "system", "font_scale", String(next.fontScale)]).checked()
             case .showTaps(let on): try await run(prefix + ["settings", "put", "system", "show_touches", on ? "1" : "0"]).checked()
+            case .colorFilter(let mode): try await AndroidColorFilter.apply(mode, serial: serial, run: run)
             case .layoutBounds(let on):
                 try await run(prefix + ["setprop", "debug.layout", on ? "true" : "false"]).checked()
                 try await run(prefix + ["service", "call", "activity", "1599295570"]).checked()
@@ -151,7 +158,8 @@ struct AndroidSettingsSnapshot {
         revision += 1; saving = true; failure = nil
         let generation = revision
         do {
-            try await AndroidSettingsDefaults.reset(serial: serial, settings: original.runtime, kind: device.kind, run: run)
+            try await AndroidSettingsDefaults.reset(serial: serial, settings: original.runtime, kind: device.kind,
+                                                   colorFilterAvailable: original.colorFilter != nil, run: run)
             if generation == revision {
                 if let display = original.runtime.display { recordDensity(device.id, display.screenSize, display.defaultDensity) }
                 await refresh(force: true)

@@ -1,11 +1,13 @@
 import AVFoundation
 import AppKit
+import CoreImage
 
 /// Client for the scrcpy server: pushes it to the device, decodes its H.264 stream
 /// into `layer` and sends input back. Protocol: scrcpy doc/develop.md, "Protocol".
 // Mutable UI state is accessed on the main actor; each socket has its own reader
 // thread and control writes are serialized. Socket shutdown is safe across threads.
 final class Mirror: @unchecked Sendable {
+    @MainActor var colorMatrix: [String: CIVector]?
     let serial: String
     let layer = AVSampleBufferDisplayLayer()
     var onSize: ((CGSize) -> Void)?
@@ -132,7 +134,7 @@ final class Mirror: @unchecked Sendable {
         guard let buffer = layer.sampleBufferRenderer.displayedPixelBuffer() else {
             throw MirrorError("No video frame is available yet. Wait for the device screen and try again.")
         }
-        return try Screenshot.png(from: buffer, rotation: rotation)
+        return try Screenshot.png(from: buffer, rotation: rotation, colorMatrix: colorMatrix)
     }
 
     // MARK: Input (main thread). Points are normalized to 0...1.

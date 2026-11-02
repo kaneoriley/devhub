@@ -1,9 +1,11 @@
 import SwiftUI
 import AppKit
+import CoreImage
 
 struct AndroidScreen: NSViewRepresentable {
     let mirror: Mirror
     let rotation: QuarterTurn
+    let colorFilter: Int?
     let acceptsFiles: Bool
     let receiveFiles: ([URL]) -> Bool
     let dropTargeted: (Bool) -> Void
@@ -18,6 +20,7 @@ struct AndroidScreen: NSViewRepresentable {
 
     func updateNSView(_ view: AndroidScreenView, context: Context) {
         view.rotation = rotation
+        view.colorFilter = colorFilter
         view.acceptsFiles = acceptsFiles
         view.receiveFiles = receiveFiles
         view.dropTargeted = dropTargeted
@@ -27,6 +30,14 @@ struct AndroidScreen: NSViewRepresentable {
 /// Hosts the video layer and turns mouse and keyboard input into Android events.
 final class AndroidScreenView: NSView {
     private let mirror: Mirror
+    var colorFilter: Int? {
+        didSet {
+            guard colorFilter != oldValue else { return }
+            let parameters = AndroidColorTransform(mode: colorFilter)?.parameters
+            layer?.filters = parameters.flatMap { CIFilter(name: "CIColorMatrix", parameters: $0) }.map { [$0] }
+            mirror.colorMatrix = parameters
+        }
+    }
     var rotation = QuarterTurn.zero {
         willSet { if newValue != rotation { releaseInput() } }
         didSet { if rotation != oldValue { needsLayout = true } }

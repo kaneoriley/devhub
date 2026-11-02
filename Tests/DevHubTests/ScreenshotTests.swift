@@ -31,6 +31,14 @@ import Testing
     image.getPixel(&samples, atX: 0, y: 0)
     #expect(samples[0] == 255 && samples[1] == 0 && samples[2] == 0)
 
+    let grayscale = try #require(AndroidColorTransform(mode: 0))
+    let filtered = try #require(NSBitmapImageRep(data: Screenshot.png(from: buffer, rotation: QuarterTurn(1), colorMatrix: grayscale.parameters)))
+    #expect(filtered.pixelsWide == 3 && filtered.pixelsHigh == 2)
+    var filteredSamples = [Int](repeating: 0, count: filtered.samplesPerPixel)
+    filtered.getPixel(&filteredSamples, atX: 0, y: 0)
+    #expect(abs(filteredSamples[0] - filteredSamples[1]) <= 1 && abs(filteredSamples[1] - filteredSamples[2]) <= 1)
+    #expect(filteredSamples[0] > 0 && filteredSamples[0] < 255 && filteredSamples[3] == 255)
+
     // The screenshot follows the locally rotated device even when the Android app
     // keeps its own orientation locked. A corner marker catches direction mistakes.
     CVPixelBufferLockBaseAddress(buffer, [])

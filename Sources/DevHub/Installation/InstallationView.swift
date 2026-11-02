@@ -63,7 +63,8 @@ struct InstallationView: View {
                 .padding(.vertical, 10)
                 Divider()
                 LabeledContent {
-                    InstallationActionButton("Upgrade", enabled: installation.canUpgrade) { installation.install() }
+                    InstallationActionButton(installation.status.installed && installation.status.upgradeAvailable == false ? "Up to date" : "Upgrade",
+                                             enabled: installation.canUpgrade) { installation.install() }
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Upgrade")

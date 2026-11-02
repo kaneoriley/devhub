@@ -22,6 +22,20 @@ struct AndroidSettingsView: View {
                         AppearanceControl(dark: Binding(get: { snapshot.nightMode == "yes" }, set: { change(.appearance($0 ? "yes" : "no")) }),
                                           automatic: snapshot.nightMode == "auto", setAutomatic: { change(.appearance("auto")) })
                     } label: { SettingsLabel(title: "Appearance", icon: "circle.lefthalf.filled") }
+                    if let filter = snapshot.colorFilter {
+                        LabeledContent {
+                            Picker("Color Filter", selection: Binding(get: { filter.mode }, set: { value in
+                                if let mode = AndroidColorFilter.Mode(rawValue: value) { change(.colorFilter(mode)) }
+                            })) {
+                                ForEach(AndroidColorFilter.Mode.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                                if AndroidColorFilter.Mode(rawValue: filter.mode) == nil { Text(filter.title).tag(filter.mode) }
+                            }
+                            .labelsHidden().lineLimit(1).truncationMode(.tail)
+                            .frame(width: 130, alignment: .trailing)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("Color Filter").help(filter.title)
+                        } label: { SettingsLabel(title: "Color Filter", icon: "camera.filters") }
+                    }
                     if runtime.navigation != nil {
                         LabeledContent {
                             Picker("Navigation Mode", selection: Binding(get: { runtime.navigation ?? .gestures }, set: { change(.navigation($0)) })) {
@@ -66,7 +80,7 @@ struct AndroidSettingsView: View {
                     SettingsFooterButton(title: "Reset to Defaults", icon: "arrow.counterclockwise", alignment: .trailing) {
                         Task { await settings.reset(); await refreshDensity() }
                     }
-                    .help("Restore default appearance and display size, gesture navigation where supported, 100% font size, and turn TalkBack, Select to Speak, Show Taps and Layout Bounds off.")
+                    .help("Restore default appearance and display size, gesture navigation where supported, 100% font size, and turn Color Filter, TalkBack, Select to Speak, Show Taps and Layout Bounds off.")
                     if let failure = settings.failure { Text(failure).font(.caption).foregroundStyle(.red) }
                 }.disabled(settings.serial == nil || settings.saving)
             } else if let failure = settings.failure {

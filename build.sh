@@ -31,6 +31,7 @@ fi
 rm -f "$VERIFY_INFO"
 echo 'DEVHUB_STEP Packaging app and resources'
 APP="${DEVHUB_BUILD_OUTPUT:-build}/DevHub.app"
+case "$APP" in /*) ;; *) APP="$ROOT/$APP" ;; esac
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/DevHub "$APP/Contents/MacOS/"
@@ -42,7 +43,7 @@ cp scripts/install-update.sh "$APP/Contents/Resources/"
 # Icon Composer icon with layers rendered by icon/icon.py and icon/apple.swift. actool writes Assets.car,
 # which macOS 26 needs to skip the gray squircle it puts around legacy icons, plus
 # an AppIcon.icns fallback.
-xcrun actool icon/AppIcon.icon --compile "$APP/Contents/Resources" --platform macosx \
+xcrun actool "$ROOT/icon/AppIcon.icon" --compile "$APP/Contents/Resources" --platform macosx \
   --minimum-deployment-target 26.0 --app-icon AppIcon \
   --output-partial-info-plist "$(mktemp -d)/icon.plist" > /dev/null
 cat > "$APP/Contents/Info.plist" <<EOF

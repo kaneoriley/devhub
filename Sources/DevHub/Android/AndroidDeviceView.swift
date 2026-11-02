@@ -335,6 +335,7 @@ struct AndroidDeviceView: View {
         failure = nil
         let lease = hub.androidSessions.acquire(serial) { AndroidMirrorSession(serial: serial) }
         let current = lease.session
+        current.mirror.clipboardEnabled = true
         session = current; sessionToken = lease.token
         defer {
             hub.androidSessions.release(lease)

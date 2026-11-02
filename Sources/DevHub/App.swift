@@ -47,6 +47,9 @@ struct ContentView: View {
     @State private var panel: Panel?
     @AppStorage("inspector.width") private var inspectorWidth = 300.0
     @State private var creating: NewDeviceKind?
+    @State private var choosingTiles = false
+    @State private var tiledDevices: Set<Device.ID>?
+    @State private var previousTiles: Set<Device.ID> = []
 
     private var listing: DeviceList {
         DeviceList(filter: deviceFilter, sort: deviceSort, showGroups: showGroups,
@@ -54,8 +57,37 @@ struct ContentView: View {
     }
 
     var body: some View {
+        Group {
+            if let tiledDevices {
+                TileModeView(selection: tiledDevices) { self.tiledDevices = nil }
+            } else {
+                deviceBrowser
+            }
+        }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .sheet(isPresented: $choosingTiles) {
+            TileDevicePicker(previousSelection: previousTiles) { selection in
+                previousTiles = selection
+                tiledDevices = selection
+            }
+        }
+        .task { await hub.poll() }
+        .onChange(of: hub.devices, initial: true) { _, _ in validateSelection() }
+        .onChange(of: deviceFilter) { _, _ in validateSelection() }
+        .onChange(of: hub.selection) { _, id in hub.recordSelection(id) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            hub.androidSessions.retain([])
+            hub.simulatorSessions.retain([])
+        }
+        .alert("Device Action Failed", isPresented: Binding(get: { hub.failure != nil }, set: { if !$0 { hub.failure = nil } })) {
+            Button("OK", role: .cancel) { hub.failure = nil }
+        } message: { Text(hub.failure ?? "") }
+        .onAppear { if !welcomed { openWindow(id: "welcome") } }
+    }
+
+    private var deviceBrowser: some View {
         @Bindable var hub = hub
-        NavigationSplitView {
+        return NavigationSplitView {
             List(selection: $hub.selection) {
                 ForEach(listing.groups(hub.displayedDevices)) { group in
                     if let title = group.title {
@@ -76,6 +108,9 @@ struct ContentView: View {
                 ToolbarItemGroup {
                     NewDeviceMenu(selection: $creating)
                     DeviceListMenu()
+                    Button("Tile Devices…", systemImage: "rectangle.split.2x2") { choosingTiles = true }
+                        .help("Tile running devices")
+                        .disabled(TileDevices.available(hub.devices, booting: hub.booting).isEmpty)
                 }
             }
             .sheet(item: $creating) { kind in
@@ -97,19 +132,6 @@ struct ContentView: View {
                 ContentUnavailableView("No Devices", systemImage: "smartphone", description: Text("Create an emulator or connect a device. Apple simulators use your selected Xcode installation."))
             }
         }
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .task { await hub.poll() }
-        .onChange(of: hub.devices, initial: true) { _, _ in validateSelection() }
-        .onChange(of: deviceFilter) { _, _ in validateSelection() }
-        .onChange(of: hub.selection) { _, id in hub.recordSelection(id) }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            hub.androidSessions.retain([])
-            hub.simulatorSessions.retain([])
-        }
-        .alert("Device Action Failed", isPresented: Binding(get: { hub.failure != nil }, set: { if !$0 { hub.failure = nil } })) {
-            Button("OK", role: .cancel) { hub.failure = nil }
-        } message: { Text(hub.failure ?? "") }
-        .onAppear { if !welcomed { openWindow(id: "welcome") } }
     }
 
     private func validateSelection() {

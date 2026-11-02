@@ -175,7 +175,7 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
         // Indigo multiplexes touch, keys, buttons and VM controls on one peer.
         // Each extra peer creates another full virtual HID device set in iOS.
         // Besides wasting time, parallel peers can time out during cold startup.
-        _modernInput=[self channel:@"digitizer"]!=nil;
+        _modernInput=!_prefersLegacyInput && [self channel:@"digitizer"]!=nil;
         if(_stopped)return;
         if(!_modernInput) {
             NSError *error=nil;
@@ -238,19 +238,25 @@ static xpc_object_t DHDictionary(NSDictionary *values) {
     }
     CFAbsoluteTime began=CFAbsoluteTimeGetCurrent();
     os_log_debug(DHInputLog(),"Connecting %{public}@",suffix);
-    typedef xpc_endpoint_t (*Endpoint)(mach_port_t); typedef void (*Enable)(xpc_connection_t);
+    // _4sim's two extra endpoint arguments must be initialized. Declaring this
+    // as a one-argument function leaves caller-register garbage in both slots.
+    // Signature verified against idb's SimulatorXPCConnector (see integration docs).
+    typedef xpc_endpoint_t (*Endpoint)(mach_port_t,uint64_t,uint64_t) __attribute__((ns_returns_retained));
+    typedef void (*Enable)(xpc_connection_t);
     Endpoint endpoint=(Endpoint)dlsym(RTLD_DEFAULT,"xpc_endpoint_create_mach_port_4sim");
     Enable enable=(Enable)dlsym(RTLD_DEFAULT,"xpc_connection_enable_sim2host_4sim");
     if(!endpoint||!enable)return nil;
     NSString *service=[@"com.apple.coredevice.feature.remote.hid." stringByAppendingString:suffix];
     NSError *error=nil; mach_port_t port=[_device lookup:service error:&error];if(!port)return nil;
-    xpc_endpoint_t ep=endpoint(port);if(!ep){mach_port_deallocate(mach_task_self(),port);return nil;}
-    xpc_connection_t connection=xpc_connection_create_from_endpoint(ep);if(!connection){mach_port_deallocate(mach_task_self(),port);return nil;}
+    // Create returns +1 and consumes the lookup's send right. ARC owns the
+    // endpoint; manually deallocating that right later can invalidate a reused port.
+    xpc_endpoint_t ep=endpoint(port,0,0);if(!ep)return nil;
+    xpc_connection_t connection=xpc_connection_create_from_endpoint(ep);if(!connection)return nil;
     DHSimChannel *channel=[DHSimChannel new];channel.service=service;channel.connection=connection;channel.valid=YES;
     dispatch_queue_t events=dispatch_queue_create("com.kaneoriley.devhub.simulator.xpc",DISPATCH_QUEUE_SERIAL);
     xpc_connection_set_target_queue(connection,events);
-    __weak DHSimChannel *weakChannel=channel;__block BOOL released=NO;
-    xpc_connection_set_event_handler(connection,^(xpc_object_t event){if(event==XPC_ERROR_CONNECTION_INVALID){weakChannel.valid=NO;if(!released){released=YES;mach_port_deallocate(mach_task_self(),port);}}});
+    __weak DHSimChannel *weakChannel=channel;
+    xpc_connection_set_event_handler(connection,^(xpc_object_t event){if(event==XPC_ERROR_CONNECTION_INVALID)weakChannel.valid=NO;});
     enable(connection);xpc_connection_resume(connection);
     // A round-trip establishes a live daemon before accepting input.
     dispatch_semaphore_t reply=dispatch_semaphore_create(0); __block BOOL alive=NO;

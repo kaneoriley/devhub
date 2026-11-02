@@ -171,6 +171,12 @@ private struct UpdateFixture {
     #expect(!installation.showUpdatePrompt) // Don't repeat a dismissed notice for the same source.
     try f.publish()
     await installation.checkOnActivation()
+    #expect(!installation.showUpdatePrompt) // New commits still respect the hourly cap.
+    let nextLaunch = Installation(defaults: defaults, bundle: bundle, consumePreviousError: false)
+    await nextLaunch.checkAtStartup()
+    #expect(!nextLaunch.showUpdatePrompt && nextLaunch.sourceUpdates == nil)
+    UpdatePromptThrottle(defaults: defaults).recordPrompt(at: Date().addingTimeInterval(-3601))
+    await installation.checkOnActivation()
     #expect(installation.showUpdatePrompt)
     #expect(installation.startupUpdateMessage.contains("2 commits behind"))
     #expect(installation.pendingCommits.commits.count == 2)
@@ -185,9 +191,26 @@ private struct UpdateFixture {
     let openWindow = Installation(defaults: defaults, bundle: bundle, consumePreviousError: false)
     openWindow.promptsEnabled = true
     openWindow.updateWindowVisible = true
+    UpdatePromptThrottle(defaults: defaults).recordPrompt(at: Date().addingTimeInterval(-3601))
     await openWindow.checkAtStartup()
     #expect(openWindow.sourceUpdates?.hasUpdates == true)
     #expect(!openWindow.showUpdatePrompt)
+}
+
+@Test func automaticUpdatePromptAllowanceIsHourlyAndPersistsAcrossLaunches() throws {
+    let suite = "devhub-prompt-throttle-\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let now = Date(timeIntervalSince1970: 100_000)
+    let throttle = UpdatePromptThrottle(defaults: defaults)
+    #expect(throttle.allowsPrompt(at: now))
+    throttle.recordPrompt(at: now)
+    let relaunched = UpdatePromptThrottle(defaults: defaults)
+    #expect(!relaunched.allowsPrompt(at: now))
+    #expect(!relaunched.allowsPrompt(at: now.addingTimeInterval(3599)))
+    #expect(relaunched.allowsPrompt(at: now.addingTimeInterval(3600)))
+    relaunched.recordPrompt(at: now.addingTimeInterval(3600))
+    #expect(!throttle.allowsPrompt(at: now.addingTimeInterval(3601)))
 }
 
 @Test func pendingCommitsExcludeInstalledHistoryAndIncludeFetchedAndLocalCommits() throws {

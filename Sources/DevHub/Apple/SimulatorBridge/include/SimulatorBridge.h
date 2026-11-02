@@ -8,6 +8,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^frameHandler)(CVPixelBufferRef buffer, NSInteger orientation, NSInteger screenID);
 @property (nonatomic, readonly) NSInteger selectedScreen;
 @property (nonatomic, readonly) BOOL modernInput;
+/// Older guest runtimes can vend a host DTUHID endpoint without consuming its input.
+@property (nonatomic) BOOL prefersLegacyInput;
 @property (nonatomic) BOOL followsActiveDisplays;
 @property (nonatomic, getter=isPaused) BOOL paused;
 - (nullable instancetype)initWithDeviceID:(NSString *)identifier developerDirectory:(NSString *)directory error:(NSError **)error;

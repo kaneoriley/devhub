@@ -12,6 +12,10 @@ struct AppleSimulator: Hashable {
     let type: String
     let family: String
     var isBooted: Bool { state == "Booted" }
+    var prefersLegacyInput: Bool {
+        guard let major = version.split(separator: ".").first.flatMap({ Int($0) }) else { return false }
+        return major < 26
+    }
     var isFoldable: Bool { type.localizedCaseInsensitiveContains("Duo") }
     var kind: DeviceKind {
         if isFoldable { return .foldable }
@@ -197,6 +201,7 @@ enum Simctl {
         let native = try await Task.detached { try DHSimulatorBridge(deviceID: self.simulator.udid, developerDirectory: directory) }.value
         guard !closed, !Task.isCancelled else { return }
         bridge = native
+        native.prefersLegacyInput = simulator.prefersLegacyInput
         native.isPaused = !active
         native.followsActiveDisplays = simulator.isFoldable
         native.frameHandler = { [weak self] buffer, orientation, screen in

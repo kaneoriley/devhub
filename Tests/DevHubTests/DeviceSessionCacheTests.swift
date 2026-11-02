@@ -67,3 +67,17 @@ import Testing
     cache.discard(replacement)
     #expect(replacement.session.stops == 1)
 }
+
+@Test @MainActor func visibleTilesStayActiveBeyondTheIdleCacheLimitAndPauseWhenLeaving() {
+    let cache = DeviceSessionCache<TestSimulatorSession>(capacity: 2)
+    let tiles = (0..<5).map { index in cache.acquire("tile-\(index)") { TestSimulatorSession() } }
+    #expect(tiles.allSatisfy { $0.session.activations == 1 && $0.session.pauses == 0 && $0.session.stops == 0 })
+    let selected = cache.acquire("tile-0") { TestSimulatorSession() }
+    for tile in tiles { cache.release(tile) }
+    #expect(selected.session === tiles[0].session)
+    #expect(selected.session.pauses == 0 && selected.session.stops == 0)
+    #expect(tiles.dropFirst().allSatisfy { $0.session.pauses == 1 })
+    #expect(tiles.dropFirst().filter { $0.session.stops == 1 }.count == 3)
+    cache.release(selected)
+    #expect(selected.session.pauses == 1)
+}

@@ -39,6 +39,7 @@ struct InstallationStatus {
 @MainActor @Observable
 final class Installation {
     private let defaults: UserDefaults
+    private let promptThrottle: UpdatePromptThrottle
     let buildIdentity: BuildIdentity?
     var applicationsDirectory: String
     var status = InstallationStatus()
@@ -64,6 +65,7 @@ final class Installation {
 
     init(defaults: UserDefaults = .standard, bundle: Bundle = .main, consumePreviousError: Bool = true) {
         self.defaults = defaults
+        promptThrottle = UpdatePromptThrottle(defaults: defaults)
         promptsEnabled = defaults.object(forKey: "installation.updatePrompts") as? Bool ?? true
         buildIdentity = bundle.url(forResource: "build-info", withExtension: "plist").flatMap { try? BuildIdentity.load(from: $0) }
         applicationsDirectory = defaults.string(forKey: "installation.applicationsDirectory") ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
@@ -140,7 +142,7 @@ final class Installation {
 
     private func checkAutomatically() async {
         if let automaticTask { await automaticTask.value; return }
-        guard promptsEnabled, !busy else { return }
+        guard promptsEnabled, !busy, promptThrottle.allowsPrompt() else { return }
         let task = Task { await performAutomaticCheck() }
         automaticTask = task
         await task.value
@@ -150,12 +152,13 @@ final class Installation {
     private func performAutomaticCheck() async {
         guard promptsEnabled else { return }
         await checkForUpdates()
-        guard promptsEnabled, !busy, !updateWindowVisible else { return }
+        guard promptsEnabled, !busy, !updateWindowVisible, !showUpdatePrompt, promptThrottle.allowsPrompt() else { return }
         if let message = Self.updatePromptMessage(running: buildIdentity, source: status.source, upstream: sourceUpdates) {
             let signature = ([message, status.source?.commit ?? "", status.source?.sourceHash ?? ""] + pendingCommits.commits.map(\.id)).joined(separator: "\0")
             guard signature != lastPromptSignature else { return }
             lastPromptSignature = signature
             startupUpdateMessage = message
+            promptThrottle.recordPrompt()
             showUpdatePrompt = true
         }
     }

@@ -3,6 +3,15 @@ import SimulatorBridge
 import Testing
 @testable import DevHub
 
+@Test func simulatorInputSelectionUsesTheGuestRuntimeGeneration() {
+    func legacy(_ version: String) -> Bool {
+        AppleSimulator(udid: "test", state: "Booted", runtime: "iOS \(version)", version: version, type: "iPhone", family: "iPhone").prefersLegacyInput
+    }
+    #expect(legacy("17.5") && legacy("18.6"))
+    #expect(!legacy("26.0") && !legacy("27.0") && !legacy("27.1"))
+    #expect(!legacy(""))
+}
+
 /// Opt in with a booted Duo's UDID. Exercise a fresh HID connection, including
 /// its very first fold event, and return the simulator to its original state.
 @Test @MainActor func freshSimulatorHIDConnectionCanFoldAndRestore() async throws {

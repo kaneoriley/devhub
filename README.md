@@ -74,11 +74,11 @@ On iOS simulators, trackpad pinch or Option-scroll zooms around the pointer. On 
 ## Requirements
 
 - macOS 26+ (Liquid Glass UI)
+- A full Xcode 26+ installation, selected for command-line tools in **Xcode → Settings → Locations**. The standalone Command Line Tools installation is insufficient to build the app bundle.
 - For Android devices: Android SDK `platform-tools`, in `~/Library/Android/sdk` or wherever `ANDROID_HOME` points. Physical Android devices need USB debugging enabled.
 - For Android emulators: SDK `emulator` tools and system images installed through `sdkmanager` or Android Studio's SDK Manager; AVDs are read from `~/.android/avd`.
 - For Apple simulators: a full Xcode installation selected with `xcode-select`, with the desired simulator runtimes installed
 - For physical Apple devices: a full Xcode installation selected with `xcode-select`. Devices on older iOS/iPadOS versions still appear in the list; screen sharing requires Xcode 27+ and a supported device running iOS/iPadOS 27+.
-- To build from source: Xcode 26+
 
 ## Android device definitions
 
@@ -98,24 +98,36 @@ The script resolves the branch to a commit, downloads and validates both catalog
 
 Hardware profiles describe the virtual device; Android SDK tools and system images are installed separately. Updating this catalog does not download system images or alter existing AVDs.
 
-## 🛠 Build
+## 🛠 Build locally
 
-For upstream source locations, compatibility rules, and verification steps when maintaining integrations, see [docs/](docs/README.md).
+DevHub must be built locally from source. The build script uses **ad hoc signing only**, for local use; it does not require a signing certificate or Apple Developer membership.
 
-Build from source:
+Install and open Xcode once to finish its component setup, then select it for command-line tools as described above. Clone this repository and build:
 
 ```sh
+git clone https://github.com/kaneoriley/droidhub.git
+cd droidhub
 ./build.sh
 open build/DevHub.app
 ```
 
-`build.sh` downloads the matching Android scrcpy server into `.build/`, compiles an optimized build with SwiftPM, wraps it in `build/DevHub.app` and signs it ad hoc for local use.
+`build.sh` downloads the pinned Android scrcpy server into `.build/` if missing, compiles an optimized executable and resources with SwiftPM, compiles the app icon, and creates `build/DevHub.app`. It signs that bundle with `codesign --force --sign -`. Use this script to create the runnable app bundle; `swift build` alone only compiles the Swift package.
+
+For an Xcode installation outside the selected command-line tools location, set `DEVELOPER_DIR` when building:
+
+```sh
+DEVELOPER_DIR="/path/to/Xcode.app/Contents/Developer" ./build.sh
+```
+
+To rebuild an existing checkout, quit DevHub, run `./build.sh` again, and reopen `build/DevHub.app`.
 
 Run the test suite:
 
 ```sh
 swift test
 ```
+
+For upstream source locations, compatibility rules, and maintenance verification, see [docs/](docs/README.md).
 
 ## How it works
 

@@ -13,7 +13,7 @@
 
 </div>
 
-**[Source](https://github.com/kaneoriley/droidhub)** · **[Issues](https://github.com/kaneoriley/droidhub/issues)**
+**[Source](https://github.com/kaneoriley/devhub)** · **[Issues](https://github.com/kaneoriley/devhub/issues)**
 
 ---
 
@@ -105,8 +105,8 @@ DevHub must be built locally from source. The build script uses **ad hoc signing
 Install and open Xcode once to finish its component setup, then select it for command-line tools as described above. Clone this repository and build:
 
 ```sh
-git clone https://github.com/kaneoriley/droidhub.git
-cd droidhub
+git clone https://github.com/kaneoriley/devhub.git
+cd devhub
 ./build.sh
 open build/DevHub.app
 ```

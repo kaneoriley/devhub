@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Links {
-    static let repo = URL(string: "https://github.com/kaneoriley/droidhub")!
+    static let repo = URL(string: "https://github.com/kaneoriley/devhub")!
     static let original = URL(string: "https://github.com/eduardoborges/droidhub")!
     static let scrcpy = URL(string: "https://github.com/Genymobile/scrcpy")!
     static let robot = URL(string: "https://creativecommons.org/licenses/by/3.0/")!

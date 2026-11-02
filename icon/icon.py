@@ -1,8 +1,9 @@
-# Renders the DroidHub app icon with Cycles, following the macOS icon grid
+# Renders the DevHub app icon with Cycles, following the macOS icon grid
 # (824 px squircle body on a 1024 px canvas, light from the top).
 # Usage: blender -b --factory-startup --python icon/icon.py -- icon/AppIcon.png [size] [samples] [layer]
 # The app ships icon/AppIcon.icon, whose layers come from the grid, phone and droid
-# layer renders. Without a layer it renders the whole icon in one image, as a preview.
+# layer renders. Run `swift icon/apple.swift` for the Apple-logo layer. Without a
+# layer this previews the Blender layers only; the complete icon is compiled by build.sh.
 #
 # The bugdroid head is based on the Android robot, created and shared by Google
 # under the Creative Commons Attribution 3.0 License.

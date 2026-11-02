@@ -1,85 +1,90 @@
 <div align="center">
-  <img src=".github/icon.png" width="128" alt="DroidHub app icon">
-  <h1>🤖 DroidHub</h1>
-  <p>Device hub for <strong>macOS</strong>, in the spirit of the Device Hub that ships with Xcode 27. Android emulators, phones, and Apple simulators in one list, with the screen live and clickable inside a normal window.<br>
+  <img src=".github/icon.png" width="128" alt="DevHub app icon">
+  <h1>DevHub</h1>
+  <p>Device hub for <strong>macOS</strong>, in the spirit of the Device Hub that ships with Xcode 27. Android emulators and phones, iOS simulators, and connected iPhones and iPads in one list, with the screen live and clickable inside a normal window.<br>
+  Forked from <strong><a href="https://github.com/eduardoborges/droidhub">DroidHub</a></strong> by Eduardo Borges, with Apple-device support, expanded device management, and additional controls.<br>
   <strong>Tiling friendly:</strong> there's no floating toolbar and no custom chrome, so yabai and friends tile it like any other app.<br>
-  Written in Swift on top of the <a href="https://github.com/Genymobile/scrcpy">scrcpy</a> server.</p>
+  Written in Swift, using <a href="https://github.com/Genymobile/scrcpy">scrcpy</a> for Android and Xcode's device frameworks for Apple devices.</p>
 
-  [![release](https://img.shields.io/github/v/release/eduardoborges/droidhub)](https://github.com/eduardoborges/droidhub/releases)
   [![platform](https://img.shields.io/badge/platform-macOS%2026%2B-blue)](#requirements)
-  [![swift](https://img.shields.io/badge/Swift-SwiftUI-orange)](Sources/DroidHub/)
+  [![swift](https://img.shields.io/badge/Swift-SwiftUI-orange)](Sources/DevHub/)
   [![scrcpy](https://img.shields.io/badge/scrcpy-5.0.1-green)](https://github.com/Genymobile/scrcpy)
   [![license](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
 
+**[Source](https://github.com/kaneoriley/droidhub)** · **[Issues](https://github.com/kaneoriley/droidhub/issues)**
+
 ---
 
-**[Download](https://github.com/eduardoborges/droidhub/releases/latest)** · **[Changelog](CHANGELOG.md)**
-
-<p align="center"><img src=".github/screenshot.png" width="360" alt="DroidHub mirroring a Pixel emulator"></p>
+<p align="center">
+  <a href=".github/screenshot-apple.png"><img src=".github/screenshot-apple.png" width="49%" alt="DevHub controlling an iPhone Duo simulator with Apple device settings"></a>
+  <a href=".github/screenshot-android.png"><img src=".github/screenshot-android.png" width="49%" alt="DevHub controlling a Pixel 9 Pro XL emulator with Android device settings"></a>
+</p>
 
 ## Why
 
-The Android emulator draws its own frameless window with a toolbar floating beside it. A tiling window manager can't place that pair properly, and scrcpy's SDL window has no device list or controls. DroidHub boots emulators headless (`-no-window`) and draws the screen in a regular SwiftUI window instead.
+DevHub brings Android and Apple devices into one native Mac window: virtual-device management, embedded screens, input, screenshots, file transfers, and device settings. Android Studio, Simulator.app, and DeviceHub do not need to stay open. The regular window works with tiling window managers, with no separate floating emulator toolbar to place.
 
 ## What it does
 
 - 🪟 **A real window.** Sidebar, screen and inspector live in one window. yabai tiles it out of the box, with no rules to add.
-- 📱 **Live screen with input.** The device streams H.264 over the scrcpy protocol and the Mac decodes it in hardware. Click and drag become touches, the trackpad scrolls, and a right click goes back.
-- ⌨️ **Type on the device.** Text, arrows and delete go straight to Android. Accented characters travel through the device clipboard, because scrcpy can only inject what the device key map knows. Esc is Back and ⌘M opens the React Native dev menu.
-- 📋 **Shared clipboard.** Copy something on the device and it lands on the Mac. ⌘V pastes the Mac clipboard into the device.
-- 🚀 **Headless emulators.** Boot and shut down AVDs from the sidebar. The emulator's own window never shows up. An emulator started from Android Studio or `react-native run-android` gets its window hidden and shows up here too; its Dock icon brings the window back.
-
-Use dedicated tools such as Android Studio or Xcode for logs and crash analysis.
+- 📱 **Live screens with input.** Interact with Android devices and iOS simulators directly: click and drag to touch, and scroll under the pointer. Physical iPhones and iPads use Xcode's embedded screen-sharing view on supported OS versions.
+- ⌨️ **Type on the device.** Use your Mac keyboard in Android apps and iOS simulators, including text, arrows, delete, accented characters, and input methods. Physical Apple devices use the input controls provided by Xcode's screen-sharing view.
+- 📋 **Copy and paste.** On Android devices and iOS simulators, ⌘C, ⌘X, and ⌘A copy, cut, and select all, and ⌘V pastes text from the Mac. Android also automatically syncs text copied on the selected device back to the Mac; simulator copy and cut shortcuts retrieve its clipboard.
+- 📦 **Drag-and-drop apps and files.** Install APKs (including a base APK and its splits together) on Android devices or simulator `.app` bundles on iOS simulators. Other files copy to Android's Downloads folder (`/sdcard/Download/`) or the Files app's local Downloads folder on iOS simulators. Drop apps and other files separately; Android folder drops aren't supported. Transfer progress and errors appear in the window.
+- 🚀 **Manage virtual devices.** Create, boot, shut down, and delete Android emulators and iOS simulators from the device list. Choose a form factor, OS version, and compatible model when creating either kind. Android Studio is optional; Apple simulators use your selected Xcode installation.
 
 And the rest:
 
-- Back, Home and Recents in a floating bar at the bottom, volume and power in the toolbar.
-- The Info inspector shows device details, including simulator identifiers, state, runtime and live display information. Android emulator Info also shows graphics acceleration and boot mode, with **Edit Configuration** below the details. Settings has the runtime controls for each platform.
-- ⌘S saves the device frame currently shown in DroidHub to the Desktop and copies it to the clipboard, like Simulator does. A thumbnail confirmation above the controls opens the saved file in Finder. Screenshots use the mirrored display at its original resolution, including when a Resizable or foldable emulator changes displays.
-- ⌘→ rotates the device.
-- Screen corners follow Android's reported per-display radii, including after rotation, resizing, or folding. Displays with no reported rounding keep their full rectangular image.
-- Drop an APK onto the device to install it, or drop a base APK and its splits together to install one app. Other files copy to the device's Downloads folder (`/sdcard/Download/`). Drop APKs and other files separately; folders aren't supported. Progress and errors appear in the window.
-- Rotate and Phone / Foldable / Tablet share a display-control capsule. Available form factors come from the AVD's configuration and emulator; unsupported segments are disabled. Dedicated foldable emulators also get Opened / Closed controls. The selection follows the device's actual size, density, and committed folding state. DroidHub boots Resizable AVDs with the emulator window hidden rather than fully headless, because resizing requires the window agent. Shut down and boot existing headless Resizable emulators once to enable switching.
+- Android has Back, Home, and Recents controls; iOS simulators have Home and App Switcher. Both have volume and power controls. Physical Apple devices use Xcode's native screen-sharing controls.
+- The Info inspector shows Android and iOS simulator details, including simulator identifiers, state, runtime, and live display information. Android emulator Info also shows graphics acceleration and boot mode, with **Edit Configuration** below the details. Settings has the runtime controls supported by each platform.
+- On Android devices and iOS simulators, ⌘S saves the displayed frame to the Desktop and copies it to the clipboard. A thumbnail confirmation opens the saved file in Finder. Screenshots use the mirrored display at its original resolution, including when a Resizable or foldable Android emulator changes displays.
+- ⌘→ rotates Android devices and iOS simulators. Dedicated foldable emulators and foldable simulators also have Closed / Opened controls.
+- Device geometry follows Android's reported per-display corner radii or Apple's simulator corner and camera masks, including after rotation, resizing, or folding. Android displays with no reported rounding keep their full rectangular image.
+- Android emulators run with their own window hidden, so the embedded screen stays in DevHub. Emulators started by Android Studio or command-line tools appear here too; their Dock icon brings the original window back.
+- Rotate and Phone / Foldable / Tablet share a display-control capsule. Available form factors come from the AVD's configuration and emulator; unsupported segments are disabled. Dedicated foldable emulators also get Opened / Closed controls. The selection follows the device's actual size, density, and committed folding state. DevHub boots Resizable AVDs with the emulator window hidden rather than fully headless, because resizing requires the window agent. Shut down and boot existing headless Resizable emulators once to enable switching.
 - Form-factor changes finish the emulator's transition before applying the latest queued selection, and use each preset's natural orientation. Emulator rotation turns the displayed device even when Android auto-rotate is disabled or an app locks its orientation; touch input and screenshots follow the displayed rotation.
 - The inspector uses an appearance picker and text-size slider on Android and Apple simulators. Android also offers Navigation Mode, TalkBack, Select to Speak, Display Size, Show Taps and Layout Bounds where supported; simulators offer Apple’s Show Borders accessibility setting when supported by Xcode. Apple’s simulator settings do not expose an equivalent to Android’s Show Taps. **Reset to Defaults** restores Android’s device-defined appearance, 100% font size, default display size and supported gesture navigation, and disables TalkBack, Select to Speak, Show Taps and Layout Bounds while preserving other accessibility services. On simulators it restores Light appearance, Large text size, and disables Show Borders.
 - **Edit Configuration** in an Android emulator's Info inspector opens its saved AVD configuration, including while it is off. Configure cameras, network speed and latency, startup orientation and boot mode, internal and expanded storage, CPU cores, graphics, RAM, VM heap, and preferred application ABI. Available camera, orientation, storage, and ABI options follow the hardware profile and installed system image. Shut down a running emulator before saving. Resizing a custom SD card asks before erasing its contents. The same options are available during emulator creation.
-- Physical devices connected through adb show up next to the emulators.
-- Apple simulators appear in their own sidebar section using Apple's CoreDevice discovery inventory. Unused automatic device definitions stay hidden; explicitly created simulators remain visible even before their first boot. Older toolchains fall back to CoreSimulator's default-device registry and usage metadata.
-- Shut-down Apple simulators have **Delete…** in their context menu, like Android emulators. Deletion asks for confirmation and removes the virtual device and its installed apps and data. DroidHub rechecks that the simulator is shut down before deleting it.
+- Physical Android devices connected through adb and physical iPhones and iPads discovered through Xcode appear in the device list alongside virtual devices.
+- iOS simulators are discovered using Apple's CoreDevice inventory and appear alongside other devices under the selected filters and grouping. Unused automatic device definitions stay hidden; explicitly created simulators remain visible even before their first boot. Older toolchains fall back to CoreSimulator's default-device registry and usage metadata.
+- Shut-down Apple simulators have **Delete…** in their context menu, like Android emulators. Deletion asks for confirmation and removes the virtual device and its installed apps and data. DevHub rechecks that the simulator is shut down before deleting it.
 - Boot and shut down Apple simulators, interact with their embedded screens using mouse and keyboard, rotate, use Home and App Switcher, and capture screenshots. Drop simulator `.app` bundles to install them. Other files copy to **Files → Browse → On My iPhone/iPad → Downloads**, using the Files app's local-storage group; a compatible simulator Files app must be installed. Existing files are kept, with numbered names for duplicate uploads. Photos, videos, and contacts are also imported into Photos or Contacts. Install apps and copy files in separate drops. Completed transfer notifications dismiss after three seconds, pausing while hovered. On simulators, wheel or two-finger trackpad scrolling swipes under the pointer; trackpad pinch or **Option-scroll** zooms around it. Simulator displays use Apple's own corner and camera masks. The selected full Xcode installation supplies the simulator runtimes and frameworks; DeviceHub does not need to be open.
-- Physical iPhones and iPads appear alongside Android devices. Their embedded screen-sharing view comes from the selected Xcode's DeviceKit framework, including Apple's unlock, pairing, compatibility checks, and supported screen-sharing controls. The framework stays in Xcode; DroidHub does not bundle it or launch DeviceHub. Physical screen sharing requires iOS/iPadOS 27 or newer.
+- Physical iPhones and iPads appear even when their OS does not support screen sharing. Selecting one shows any connection, trust, unlock, or compatibility requirements. On supported devices running iOS/iPadOS 27 or newer, the embedded screen-sharing view comes from the selected Xcode's DeviceKit framework. The framework stays in Xcode; DevHub does not bundle it or launch DeviceHub.
 - The + menu offers **Android Emulator…** and **iOS Simulator…**. Android creation uses the bundled device catalog and installed system images; Android Studio and SDK cmdline-tools are not required. iOS creation lets you choose a name, installed OS version, and compatible iPhone or iPad model from the selected Xcode installation. New virtual devices start shut down and can be booted from the device list. Virtual devices that are off can be deleted from their context menu.
-- Plays well with AI agents. They drive the device through `adb` while you watch in DroidHub, and Show Taps marks every tap they make.
+- Works alongside automation tools: watch Android sessions driven through `adb` or iOS simulators driven through Apple's simulator tools. Android's Show Taps can mark taps made by other tools too.
 
 ## Keyboard
 
-| Key | Action |
-|---|---|
-| Hold ⌘, move, then click and drag | Two-finger gesture around the cursor position captured when ⌘ was pressed; release the click to lift both fingers |
-| ⌘S | Screenshot |
-| ⌘→ | Rotate |
-| ⇧⌘H | Home |
-| Esc or right click | Back |
-| ⌘M | Menu key (React Native dev menu) |
-| ⌘C ⌘X ⌘A | Copy, cut and select all on the device |
-| ⌘V | Paste the Mac clipboard |
+These shortcuts apply while interacting with the embedded screen. Physical iPhones and iPads use the controls and shortcuts supplied by Xcode's native screen-sharing view.
+
+| Key | Action | Supported devices |
+|---|---|---|
+| Hold ⌘, move, then click and drag | Two-finger gesture around the cursor position captured when ⌘ was pressed; release the click to lift both fingers | Android, iOS simulators |
+| ⌘S | Screenshot | Android, iOS simulators |
+| ⌘→ | Rotate | Android, iOS simulators |
+| ⇧⌘H | Home | Android, iOS simulators |
+| Esc or right click | Back | Android |
+| ⌘C ⌘X ⌘A | Copy, cut, select all | Android, iOS simulators |
+| ⌘V | Paste text from the Mac | Android, iOS simulators |
+
+On iOS simulators, trackpad pinch or Option-scroll zooms around the pointer. On both platforms, wheel and two-finger trackpad scrolling act under the pointer.
 
 ## Requirements
 
 - macOS 26+ (Liquid Glass UI)
-- Android SDK with `platform-tools` and `emulator`, in `~/Library/Android/sdk` or wherever `ANDROID_HOME` points
-- Android system images installed through `sdkmanager` or Android Studio's SDK Manager; AVDs are read from `~/.android/avd`
+- For Android devices: Android SDK `platform-tools`, in `~/Library/Android/sdk` or wherever `ANDROID_HOME` points. Physical Android devices need USB debugging enabled.
+- For Android emulators: SDK `emulator` tools and system images installed through `sdkmanager` or Android Studio's SDK Manager; AVDs are read from `~/.android/avd`.
 - For Apple simulators: a full Xcode installation selected with `xcode-select`, with the desired simulator runtimes installed
-- For physical Apple-device screen sharing: Xcode 27+ and a supported iPhone or iPad running iOS/iPadOS 27+
+- For physical Apple devices: a full Xcode installation selected with `xcode-select`. Devices on older iOS/iPadOS versions still appear in the list; screen sharing requires Xcode 27+ and a supported device running iOS/iPadOS 27+.
 - To build from source: Xcode 26+
 
 ## Android device definitions
 
-DroidHub bundles Google's hardware-profile definitions, `nexus.xml` and `devices.xml`, from the Android Open Source Project's [tools/base device catalog](https://android.googlesource.com/platform/tools/base/+/mirror-goog-studio-main/sdklib/src/main/resources/com/android/sdklib/devices/). These are the definitions used by Android Studio's Device Manager. Android Studio does not need to be installed to load the catalog or create an emulator in DroidHub.
+DevHub bundles Google's hardware-profile definitions, `nexus.xml` and `devices.xml`, from the Android Open Source Project's [tools/base device catalog](https://android.googlesource.com/platform/tools/base/+/mirror-goog-studio-main/sdklib/src/main/resources/com/android/sdklib/devices/). These are the definitions used by Android Studio's Device Manager. Android Studio does not need to be installed to load the catalog or create an emulator in DevHub.
 
-The XML files are kept unmodified in [Sources/DroidHub/Resources](Sources/DroidHub/Resources). [device-catalog-NOTICE.txt](Sources/DroidHub/Resources/device-catalog-NOTICE.txt) records the exact upstream commit and source URL. The definitions are distributed under [Apache License 2.0](ThirdParty/android-tools-LICENSE).
+The XML files are kept unmodified in [Sources/DevHub/Android/Resources](Sources/DevHub/Android/Resources). [device-catalog-NOTICE.txt](Sources/DevHub/Android/Resources/device-catalog-NOTICE.txt) records the exact upstream commit and source URL. The definitions are distributed under [Apache License 2.0](ThirdParty/android-tools-LICENSE).
 
 To refresh the bundled snapshot from Google's Studio branch, run from the repository root:
 
@@ -97,52 +102,32 @@ Hardware profiles describe the virtual device; Android SDK tools and system imag
 
 For upstream source locations, compatibility rules, and verification steps when maintaining integrations, see [docs/](docs/README.md).
 
-Install it with Homebrew:
-
-```sh
-brew install --cask eduardoborges/tap/droidhub
-```
-
-Or grab `DroidHub.dmg` from the [latest release](https://github.com/eduardoborges/droidhub/releases/latest), or build it yourself:
+Build from source:
 
 ```sh
 ./build.sh
-open build/DroidHub.app
+open build/DevHub.app
 ```
 
-`build.sh` downloads the matching scrcpy server into `.build/`, compiles a release build with SwiftPM, wraps it in `build/DroidHub.app` and signs it ad hoc. `./build.sh --dmg` also packages `build/DroidHub.dmg`. Set `SIGN_IDENTITY` to sign with a Developer ID, and the `NOTARY_*` variables to notarize, which is what CD does.
+`build.sh` downloads the matching Android scrcpy server into `.build/`, compiles an optimized build with SwiftPM, wraps it in `build/DevHub.app` and signs it ad hoc for local use.
 
-The tests cover H.264 parsing and the control message encoding:
+Run the test suite:
 
 ```sh
 swift test
 ```
 
-## Releases
-
-Commits follow [Conventional Commits](https://www.conventionalcommits.org). On every push to `main`, release-please keeps a release PR open with the next version and the changelog. Merging it tags the release, and CD attaches a signed, notarized `DroidHub.dmg` and `DroidHub.zip`.
-
 ## How it works
 
-When you select a device, DroidHub pushes `scrcpy-server` to `/data/local/tmp`, opens an `adb forward` tunnel and starts the server with `app_process`. Two sockets come back. The video socket carries H.264 packets, which go into an `AVSampleBufferDisplayLayer`. The control socket carries touches, keys, text and clipboard in scrcpy's binary format, both ways.
+For Android emulators and physical Android devices, DevHub pushes `scrcpy-server` to `/data/local/tmp`, opens an `adb forward` tunnel and starts the server with `app_process`. Two sockets come back. The video socket carries H.264 packets, which go into an `AVSampleBufferDisplayLayer`. The control socket carries touches, keys, text and clipboard in scrcpy's binary format, both ways.
 
-DroidHub retains the 12 most recently selected Android connections, so switching back reuses the server, tunnel, and decoder. Offscreen Android sessions drain compressed packets without decoding frames; switching back requests a fresh capture/keyframe over the existing control connection. Only the selected device can update the Mac clipboard. Disconnecting a device or evicting an older session closes its server and tunnel. Apple simulators use a separate cache of 12 sessions and pause offscreen rendering.
+DevHub retains the 12 most recently selected Android connections, so switching back reuses the server, tunnel, and decoder. Offscreen Android sessions drain compressed packets without decoding frames; switching back requests a fresh capture/keyframe over the existing control connection. Only the selected Android device can update the Mac clipboard. Disconnecting a device or evicting an older session closes its server and tunnel.
 
-The scrcpy version is pinned in `build.sh`. The protocol changes between releases and the server refuses a client from a different version, so bump both together.
+iOS simulators connect directly through CoreSimulator and SimulatorKit from the selected Xcode installation. DevHub renders their shared-memory display frames and forwards mouse and keyboard input through Apple's simulator APIs. Simulator sessions use a separate cache of 12 connections and pause offscreen rendering. Simulator.app and DeviceHub do not need to be open.
 
-## Repository layout
+Physical iPhones and iPads use an embedded screen-sharing view supplied by Xcode's DeviceKit framework, including Apple's pairing, unlock and compatibility handling. Screen sharing requires iOS/iPadOS 27 or newer. These Apple frameworks are loaded from the selected Xcode installation and are not bundled with DevHub.
 
-```
-Sources/DroidHub/
-  App.swift      SwiftUI window: sidebar, device frame, bottom bar, inspector, input
-  Hub.swift      device discovery (adb, AVD files), boot, shutdown, screenshots
-  Mirror.swift   scrcpy client: sockets, H.264 to CMSampleBuffer, control messages
-Tests/           protocol tests
-icon/            AppIcon.icon (Icon Composer) and icon.py, the Blender script that renders its layers
-.github/         CI (pull requests), CR (release-please), CD (signed dmg)
-build.sh         builds, signs and packages DroidHub.app
-version.txt      current version, bumped by release-please
-```
+The Android scrcpy server version is pinned in `build.sh`. The protocol changes between releases and the server refuses a client from a different version, so bump both together.
 
 ## License
 

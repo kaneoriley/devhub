@@ -13,7 +13,7 @@ from xml.etree import ElementTree
 ROOT = "https://android.googlesource.com/platform/tools/base"
 PROFILE_PATH = "sdklib/src/main/resources/com/android/sdklib/devices"
 PROJECT = Path(__file__).resolve().parents[1]
-RESOURCES = PROJECT / "Sources/DroidHub/Resources"
+RESOURCES = PROJECT / "Sources/DevHub/Android/Resources"
 
 
 def download(url):

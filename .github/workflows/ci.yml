@@ -1,6 +1,6 @@
 name: CI
 
-# Validates pull requests. Release builds live in CD.
+# Builds and tests pull requests.
 on:
   pull_request:
     paths-ignore: ['**.md']

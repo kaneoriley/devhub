@@ -30,14 +30,14 @@ Also check the [AVD documentation](https://developer.android.com/studio/run/mana
 
 The initial implementation was checked on 2026-11-02 against Studio revision `224edb8a5a99071fc2fb02bb7a4f80021723ccf6` and tools/base revision `45628254f0f8a9bb3755d73f3d30ca78fbb2153d`. These identify the comparison baseline, not a promise that upstream behavior will stay fixed. Use `mirror-goog-studio-main` links above to check later changes; replace the branch with a commit hash to inspect a reproducible snapshot.
 
-## DroidHub implementation
+## DevHub implementation
 
-- `Sources/DroidHub/EmulatorConfiguration.swift`: typed capacities, config loading, compatibility, validation, INI updates, SD image generation, save conflict checks and rollback.
-- `Sources/DroidHub/EmulatorConfigurationView.swift`: shared dialog, controls, replacement confirmation, editing existing AVDs.
-- `Sources/DroidHub/NewEmulator.swift`: profile metadata, creation defaults and applying configuration to new AVDs.
-- `Sources/DroidHub/DeviceInfo.swift`: **Edit Configuration** below emulator details in the Info inspector, available offline. Graphics acceleration and boot mode are read from the saved AVD configuration and refreshed when the editor closes.
-- `Sources/DroidHub/Hub.swift`: AVD directory resolution, boot arguments, and preventing DroidHub from booting a device during a save.
-- `Tests/DroidHubTests/EmulatorConfigurationTests.swift`: serialization, compatibility, file preservation, failure recovery, and SDK-backed SD card test.
+- `Sources/DevHub/Android/EmulatorConfiguration.swift`: typed capacities, config loading, compatibility, validation, INI updates, SD image generation, save conflict checks and rollback.
+- `Sources/DevHub/Android/EmulatorConfigurationView.swift`: shared dialog, controls, replacement confirmation, editing existing AVDs.
+- `Sources/DevHub/Android/NewEmulator.swift`: profile metadata, creation defaults and applying configuration to new AVDs.
+- `Sources/DevHub/Android/AndroidDeviceInfoView.swift`: **Edit Configuration** below emulator details in the Info inspector, available offline. Graphics acceleration and boot mode are read from the saved AVD configuration and refreshed when the editor closes.
+- `Sources/DevHub/Android/SDK.swift` and `Hub+Android.swift`: AVD directory resolution, boot arguments, and preventing DevHub from booting a device during a save.
+- `Tests/DevHubTests/Android/EmulatorConfigurationTests.swift`: serialization, compatibility, file preservation, failure recovery, and SDK-backed SD card test.
 
 ## Rules that are easy to miss
 
@@ -54,7 +54,7 @@ The initial implementation was checked on 2026-11-02 against Studio revision `22
 Run `swift test` and `./build.sh`. To exercise the installed SDK tool as well:
 
 ```sh
-DROIDHUB_TEST_AVD_SDCARD=1 swift test
+DEVHUB_TEST_AVD_SDCARD=1 swift test
 ```
 
 That test creates a 10 MB image in a temporary directory, checks its size and FAT signature, and verifies that a later unrelated edit preserves it. It does not edit the user's AVDs.

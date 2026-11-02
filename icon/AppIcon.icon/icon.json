@@ -11,12 +11,25 @@
         {
           "glass" : true,
           "image-name" : "droid.png",
-          "name" : "droid"
+          "name" : "droid",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [50, -253]
+          }
+        },
+        {
+          "glass" : true,
+          "image-name" : "apple.png",
+          "name" : "apple"
         },
         {
           "glass" : true,
           "image-name" : "phone.png",
-          "name" : "phone"
+          "name" : "phone",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [-40, 68]
+          }
         }
       ]
     },

@@ -10,7 +10,7 @@ struct InstallationStatus {
 
     var upgradeAvailable: Bool? {
         guard let source, let installedIdentity else { return nil }
-        return source.sourceHash != installedIdentity.sourceHash || source.commit != installedIdentity.commit
+        return source.sourceHash != installedIdentity.sourceHash
     }
 
     var description: String {
@@ -162,7 +162,7 @@ final class Installation {
 
     nonisolated static func updatePromptMessage(running: BuildIdentity?, source: BuildIdentity?, upstream: GitSourceUpdates?) -> String? {
         if let upstream, upstream.hasUpdates { return upstream.message }
-        if let source, let running, source.sourceHash != running.sourceHash || source.commit != running.commit {
+        if let source, let running, source.sourceHash != running.sourceHash {
             return "Your source checkout has changed since this DevHub build. Open Check for Updates to build and install it."
         }
         return nil
